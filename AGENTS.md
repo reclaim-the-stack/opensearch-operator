@@ -19,6 +19,7 @@ Examples
 - Tail logs when running in cluster: `kubectl logs -f deploy/opensearch-operator -n <ns>`.
 
 ## Coding Style & Naming Conventions
+- Don't abbreviate names of methods / variables
 - Indentation: 2 spaces; no tabs.
 - Files: `snake_case.rb`; Classes/Modules: `CamelCase` under the `OpenSearchOperator` namespace.
 - Add `# frozen_string_literal: true` to Ruby files.
