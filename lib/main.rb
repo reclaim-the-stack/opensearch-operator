@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
+require "bundler/setup"
+
 require "json"
 require "logger"
-require "k8s-client"
+require "k8s-ruby"
 
 require_relative "opensearch_operator/version"
 
@@ -21,14 +23,16 @@ class OpensearchOperator
       LOGGER.warn "Falling back to local kubeconfig"
       K8s::Client.config(K8s::Config.load_file(ENV["KUBECONFIG"] || File.join(Dir.home, ".kube", "config")))
     end
-    @clusterd = @client.api("#{GROUP}/#{VERSION}").resource(PLURAL)
+    @clusters = @client.api("#{GROUP}/#{VERSION}").resource(PLURAL)
     @core = @client.api("v1")
     @apps = @client.api("apps/v1")
   end
 
   def run
+    setup_signal_traps
     LOGGER.info "Starting watch on #{PLURAL}.#{GROUP}/#{VERSION}"
-    @clusterd.watch do |event|
+
+    @clusters.watch do |event|
       resource = event.resource
       next if resource.nil?
 
@@ -40,9 +44,26 @@ class OpensearchOperator
       end
     end
   rescue StandardError => e
-    LOGGER.error("Watch clusterashed: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
-    sleep 2
-    retry
+    if e.is_a? OpenSSL::SSL::SSLErrorWaitReadable && @stopping
+      # Ignore SSL errors during shutdown
+    else
+      LOGGER.error("Watch cluster crashed: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
+      sleep 2
+      retry
+    end
+  end
+
+  def setup_signal_traps
+    @stopping = false
+    %w[INT TERM].each do |sig|
+      Signal.trap(sig) do
+        unless @stopping
+          puts "Received #{sig}, shutting down..."
+          @stopping = true
+          exit
+        end
+      end
+    end
   end
 
   private
@@ -64,7 +85,7 @@ class OpensearchOperator
       st = @apps.resource("statefulsets", namespace:).get(name)
       ready = st.status&.readyReplicas.to_i
       patch = { status: { phase: ready >= replicas ? "Ready" : "Reconciling", readyReplicas: ready } }
-      @clusterd.merge_patch(name, patch, namespace:)
+      @clusters.merge_patch(name, patch, namespace:)
     rescue StandardError => e
       LOGGER.warn "Status update failed: #{e.message}"
     end

@@ -36,4 +36,3 @@ subjects:
   - kind: ServiceAccount
     name: opensearch-operator
     namespace: opensearch-system
----
