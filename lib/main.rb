@@ -1,0 +1,153 @@
+# frozen_string_literal: true
+
+require "json"
+require "logger"
+require "k8s-client"
+
+require_relative "opensearch_operator/version"
+
+LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "INFO").upcase)
+
+class OpensearchOperator
+  FIELD_MANAGER = "opensearch-operator"
+  GROUP = "opensearch.reclaim-the-stack.com"
+  VERSION = "v1alpha1"
+  PLURAL = "opensearchclusters"
+
+  def initialize
+    @client = begin
+      K8s::Client.in_cluster_config
+    rescue K8s::Error::Configuration
+      LOGGER.warn "Falling back to local kubeconfig"
+      K8s::Client.config(K8s::Config.load_file(ENV["KUBECONFIG"] || File.join(Dir.home, ".kube", "config")))
+    end
+    @clusterd = @client.api("#{GROUP}/#{VERSION}").resource(PLURAL)
+    @core = @client.api("v1")
+    @apps = @client.api("apps/v1")
+  end
+
+  def run
+    LOGGER.info "Starting watch on #{PLURAL}.#{GROUP}/#{VERSION}"
+    @clusterd.watch do |event|
+      resource = event.resource
+      next if resource.nil?
+
+      case event.type # "ADDED", "MODIFIED", "DELETED", "BOOKMARK", "ERROR"
+      when "ADDED", "MODIFIED"
+        reconcile(resource)
+      when "DELETED"
+        finalize(resource)
+      end
+    end
+  rescue StandardError => e
+    LOGGER.error("Watch clusterashed: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
+    sleep 2
+    retry
+  end
+
+  private
+
+  def reconcile(cluster)
+    ns = cluster.metadata.namespace || "default"
+    name = cluster.metadata.name
+    spec = cluster.spec
+
+    image = spec.fetch("image") # || "opensearchproject/opensearch:2.12.0"
+    replicas = (spec["replicas"] || 1).to_i
+    storage_size = spec["storageSize"] || "10Gi"
+
+    ensure_statefulset(namespace, name, image, replicas, storage_size)
+    ensure_service(namespace, name)
+
+    # (Optional) update status
+    begin
+      st = @apps.resource("statefulsets", namespace:).get(name)
+      ready = st.status&.readyReplicas.to_i
+      patch = { status: { phase: ready >= replicas ? "Ready" : "Reconciling", readyReplicas: ready } }
+      @clusterd.merge_patch(name, patch, namespace:)
+    rescue StandardError => e
+      LOGGER.warn "Status update failed: #{e.message}"
+    end
+  end
+
+  def finalize(cluster)
+    # For now: do nothing (let GC handle child resources or add OwnerReferences).
+    # Optional: implement PVC cleanup behind a finalizer.
+    LOGGER.info "Finalized #{cluster.metadata.namespace}/#{cluster.metadata.name}"
+  end
+
+  def ensure_service(namespace, name)
+    services = @core.resource("services", namespace:)
+    body = {
+      apiVersion: "v1", kind: "Service",
+      metadata: { name:, labels: { "app.kubernetes.io/name" => name } },
+      spec: {
+        type: "ClusterIP",
+        ports: [{ name: "http", port: 9200, targetPort: 9200 }],
+        selector: { "app.kubernetes.io/name" => name },
+      }
+    }
+
+    apply(services, body)
+  end
+
+  def ensure_statefulset(namespace, name, image, replicas, storage_size)
+    statefulsets = @apps.resource("statefulsets", namespace:)
+    body = {
+      apiVersion: "apps/v1", kind: "StatefulSet",
+      metadata: { name:, labels: { "app.kubernetes.io/name" => name } },
+      spec: {
+        serviceName: name,
+        replicas: replicas,
+        selector: { matchLabels: { "app.kubernetes.io/name" => name } },
+        template: {
+          metadata: { labels: { "app.kubernetes.io/name" => name } },
+          spec: {
+            containers: [
+              {
+                name: "opensearch",
+                image: image,
+                ports: [
+                  { name: "http", containerPort: 9200 },
+                  { name: "metrics", containerPort: 9600 },
+                ],
+                env: [
+                  # MVP runs single-node; remove this once you add real clustering logic
+                  { name: "discovery.type", value: "single-node" },
+                  { name: "OPENSEARCH_JAVA_OPTS", value: "-Xms512m -Xmx512m" },
+                ],
+                volumeMounts: [{ name: "data", mountPath: "/usr/share/opensearch/data" }],
+                readinessProbe: {
+                  httpGet: { path: "/_cluster/health", port: 9200 },
+                  initialDelaySeconds: 20, periodSeconds: 10, failureThreshold: 6
+                },
+                resources: {}, # fill from spec["resources"] if provided
+              },
+            ],
+          },
+        },
+        volumeClaimTemplates: [
+          {
+            metadata: { name: "data" },
+            spec: {
+              accessModes: ["ReadWriteOnce"],
+              resources: { requests: { storage: storage_size } },
+            },
+          },
+        ],
+      }
+    }
+
+    apply(statefulsets, body)
+  end
+
+  # Server-side apply with field manager (idempotent & patch-friendly)
+  def apply(client, hash)
+    resource = K8s::Resource.new(hash)
+    client.apply(resource, field_manager: FIELD_MANAGER, force: true)
+  rescue K8s::Error::NotFound
+    client.clustereate(resource)
+  end
+end
+
+OpensearchOperator.new.run if $PROGRAM_NAME == __FILE__

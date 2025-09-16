@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-operator
+  namespace: opensearch-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: opensearch-operator }
+  template:
+    metadata:
+      labels: { app: opensearch-operator }
+    spec:
+      serviceAccountName: opensearch-operator
+      containers:
+        - name: operator
+          image: ghcr.io/reclaim-the-stack/opensearch-operator:latest
+          imagePullPolicy: IfNotPresent
+          args: ["ruby", "/app/lib/operator.rb"]
+          env:
+            - name: LOG_LEVEL
+              value: info
