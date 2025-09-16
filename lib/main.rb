@@ -47,7 +47,7 @@ class OpensearchOperator
       end
     end
   rescue StandardError => e
-    if e.is_a? OpenSSL::SSL::SSLErrorWaitReadable && @stopping
+    if e.is_a?(OpenSSL::SSL::SSLErrorWaitReadable) && @stopping
       # Ignore SSL errors during shutdown
     else
       LOGGER.error("Watch cluster crashed: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
@@ -72,15 +72,15 @@ class OpensearchOperator
   private
 
   def reconcile(cluster)
-    ns = cluster.metadata.namespace || "default"
+    namespace = cluster.metadata.namespace || "default"
     name = cluster.metadata.name
     spec = cluster.spec
 
-    image = spec.fetch("image") # || "opensearchproject/opensearch:2.12.0"
-    replicas = (spec["replicas"] || 1).to_i
-    storage_size = spec["storageSize"] || "10Gi"
+    image = spec.image
+    replicas = spec.replicas
+    disk_size = spec.diskSize
 
-    ensure_statefulset(namespace, name, image, replicas, storage_size)
+    ensure_statefulset(namespace, name, image, replicas, disk_size)
     ensure_service(namespace, name)
 
     # (Optional) update status
@@ -101,7 +101,6 @@ class OpensearchOperator
   end
 
   def ensure_service(namespace, name)
-    services = @core.resource("services", namespace:)
     body = {
       apiVersion: "v1", kind: "Service",
       metadata: { name:, labels: { "app.kubernetes.io/name" => name } },
@@ -111,15 +110,15 @@ class OpensearchOperator
         selector: { "app.kubernetes.io/name" => name },
       }
     }
+    services = @core.resource("services", namespace:)
 
     apply(services, body)
   end
 
-  def ensure_statefulset(namespace, name, image, replicas, storage_size)
-    statefulsets = @apps.resource("statefulsets", namespace:)
+  def ensure_statefulset(namespace, name, image, replicas, disk_size)
     body = {
       apiVersion: "apps/v1", kind: "StatefulSet",
-      metadata: { name:, labels: { "app.kubernetes.io/name" => name } },
+      metadata: { name:, namespace:, labels: { "app.kubernetes.io/name" => name } },
       spec: {
         serviceName: name,
         replicas: replicas,
@@ -155,22 +154,20 @@ class OpensearchOperator
             metadata: { name: "data" },
             spec: {
               accessModes: ["ReadWriteOnce"],
-              resources: { requests: { storage: storage_size } },
+              resources: { requests: { storage: disk_size } },
             },
           },
         ],
       }
     }
+    statefulsets = @apps.resource("statefulsets", namespace:)
 
     apply(statefulsets, body)
   end
 
-  # Server-side apply with field manager (idempotent & patch-friendly)
   def apply(client, hash)
     resource = K8s::Resource.new(hash)
-    client.apply(resource, field_manager: FIELD_MANAGER, force: true)
-  rescue K8s::Error::NotFound
-    client.clustereate(resource)
+    client.create_resource(resource)
   end
 end
 
