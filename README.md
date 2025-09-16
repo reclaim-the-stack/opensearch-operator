@@ -31,3 +31,16 @@ The operator tries in‑cluster config and falls back to local kubeconfig.
 - Test: `bundle exec rspec`
 - Build image: `docker build -t opensearch-operator-rb .`
 - Contributor guide: see `AGENTS.md` for structure, naming, testing, and PR guidelines.
+
+## Container Image
+
+Images are published to GHCR via CI.
+
+- Base image: `ghcr.io/reclaim-the-stack/opensearch-operator`
+- Tags: semver tags on releases (e.g., `v0.1.0` → `:0.1.0`, `:0.1`), SHA tags for all pushes, `latest` on `master` branch.
+
+Examples
+
+- Pull latest master: `docker pull ghcr.io/reclaim-the-stack/opensearch-operator:latest`
+- Pull a release: `docker pull ghcr.io/reclaim-the-stack/opensearch-operator:0.1.0`
+- Pull a specific commit: `docker pull ghcr.io/reclaim-the-stack/opensearch-operator:sha-5ffbd47e74dc7bce2a57787f766f2846d2abae4a`
