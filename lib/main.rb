@@ -8,6 +8,9 @@ require "k8s-ruby"
 
 require_relative "opensearch_operator/version"
 
+K8s::Logging.debug!
+K8s::Transport.verbose!
+
 $stdout.sync = true
 LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "INFO").upcase)
 
@@ -74,21 +77,24 @@ class OpensearchOperator
   def reconcile(cluster)
     namespace = cluster.metadata.namespace || "default"
     name = cluster.metadata.name
-    spec = cluster.spec
 
-    image = spec.image
-    replicas = spec.replicas
-    disk_size = spec.diskSize
-
-    ensure_statefulset(namespace, name, image, replicas, disk_size)
+    ensure_statefulset(namespace, name, cluster)
     ensure_service(namespace, name)
 
     # (Optional) update status
     begin
-      st = @apps.resource("statefulsets", namespace:).get(name)
-      ready = st.status&.readyReplicas.to_i
-      patch = { status: { phase: ready >= replicas ? "Ready" : "Reconciling", readyReplicas: ready } }
-      @clusters.merge_patch(name, patch, namespace:)
+      statefulset = @apps.resource("statefulsets", namespace:).get(name)
+
+      ready = statefulset.status&.readyReplicas.to_i
+      phase = ready >= cluster.spec.replicas ? "Ready" : "Reconciling"
+
+      # TODO: This 422s
+      json_patch = [
+        { op: "replace", path: "/status/phase", value: phase },
+        { op: "replace", path: "/status/nodes", value: ready },
+      ]
+
+      @clusters.json_patch(name, json_patch, namespace:)
     rescue StandardError => e
       LOGGER.warn "Status update failed: #{e.message}"
     end
@@ -103,7 +109,7 @@ class OpensearchOperator
   def ensure_service(namespace, name)
     body = {
       apiVersion: "v1", kind: "Service",
-      metadata: { name:, labels: { "app.kubernetes.io/name" => name } },
+      metadata: { name:, namespace:, labels: { "app.kubernetes.io/name" => name } },
       spec: {
         type: "ClusterIP",
         ports: [{ name: "http", port: 9200, targetPort: 9200 }],
@@ -112,10 +118,16 @@ class OpensearchOperator
     }
     services = @core.resource("services", namespace:)
 
-    apply(services, body)
+    upsert(services, body)
   end
 
-  def ensure_statefulset(namespace, name, image, replicas, disk_size)
+  def ensure_statefulset(namespace, name, cluster)
+    spec = cluster.spec
+
+    image = spec.image
+    replicas = spec.replicas
+    disk_size = spec.diskSize
+
     body = {
       apiVersion: "apps/v1", kind: "StatefulSet",
       metadata: { name:, namespace:, labels: { "app.kubernetes.io/name" => name } },
@@ -132,19 +144,21 @@ class OpensearchOperator
                 image: image,
                 ports: [
                   { name: "http", containerPort: 9200 },
-                  { name: "metrics", containerPort: 9600 },
                 ],
                 env: [
                   # MVP runs single-node; remove this once you add real clustering logic
                   { name: "discovery.type", value: "single-node" },
                   { name: "OPENSEARCH_JAVA_OPTS", value: "-Xms512m -Xmx512m" },
+                  { name: "DISABLE_SECURITY_PLUGIN", value: "true" },
                 ],
                 volumeMounts: [{ name: "data", mountPath: "/usr/share/opensearch/data" }],
                 readinessProbe: {
                   httpGet: { path: "/_cluster/health", port: 9200 },
                   initialDelaySeconds: 20, periodSeconds: 10, failureThreshold: 6
                 },
-                resources: {}, # fill from spec["resources"] if provided
+                resources: spec.resources || {},
+                nodeSelector: spec.nodeSelector || {},
+                tolerations: spec.tolerations || [],
               },
             ],
           },
@@ -162,12 +176,23 @@ class OpensearchOperator
     }
     statefulsets = @apps.resource("statefulsets", namespace:)
 
-    apply(statefulsets, body)
+    upsert(statefulsets, body)
   end
 
-  def apply(client, hash)
-    resource = K8s::Resource.new(hash)
-    client.create_resource(resource)
+  def upsert(client, resource_hash)
+    resource = K8s::Resource.new(resource_hash)
+    existing = begin
+      client.get(resource.metadata.name, namespace: resource.metadata.namespace)
+    rescue K8s::Error::NotFound
+      nil
+    end
+
+    if existing.nil?
+      client.create_resource(resource)
+    else
+      #resource.metadata.resourceVersion = existing.metadata.resourceVersion
+      client.update_resource(resource)
+    end
   end
 end
 
