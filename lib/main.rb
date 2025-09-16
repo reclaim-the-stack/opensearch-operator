@@ -8,6 +8,7 @@ require "k8s-ruby"
 
 require_relative "opensearch_operator/version"
 
+$stdout.sync = true
 LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "INFO").upcase)
 
 class OpensearchOperator
@@ -35,6 +36,8 @@ class OpensearchOperator
     @clusters.watch do |event|
       resource = event.resource
       next if resource.nil?
+
+      LOGGER.info "#{event.type} #{resource.metadata.namespace}/#{resource.metadata.name}"
 
       case event.type # "ADDED", "MODIFIED", "DELETED", "BOOKMARK", "ERROR"
       when "ADDED", "MODIFIED"
