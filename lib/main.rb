@@ -79,7 +79,7 @@ class OpensearchOperator
     name = cluster.metadata.name
 
     ensure_statefulset(namespace, name, cluster)
-    ensure_service(namespace, name)
+    ensure_service(namespace, name, cluster)
 
     # (Optional) update status
     begin
@@ -106,10 +106,15 @@ class OpensearchOperator
     LOGGER.info "Finalized #{cluster.metadata.namespace}/#{cluster.metadata.name}"
   end
 
-  def ensure_service(namespace, name)
+  def ensure_service(namespace, name, cluster)
     body = {
       apiVersion: "v1", kind: "Service",
-      metadata: { name:, namespace:, labels: { "app.kubernetes.io/name" => name } },
+      metadata: {
+        name:,
+        namespace:,
+        labels: { "app.kubernetes.io/name" => name },
+        ownerReferences: owner_references(cluster),
+      },
       spec: {
         type: "ClusterIP",
         ports: [{ name: "http", port: 9200, targetPort: 9200 }],
@@ -130,7 +135,12 @@ class OpensearchOperator
 
     body = {
       apiVersion: "apps/v1", kind: "StatefulSet",
-      metadata: { name:, namespace:, labels: { "app.kubernetes.io/name" => name } },
+      metadata: {
+        name:,
+        namespace:,
+        labels: { "app.kubernetes.io/name" => name },
+        ownerReferences: owner_references(cluster),
+      },
       spec: {
         serviceName: name,
         replicas: replicas,
@@ -138,6 +148,8 @@ class OpensearchOperator
         template: {
           metadata: { labels: { "app.kubernetes.io/name" => name } },
           spec: {
+            nodeSelector: spec.nodeSelector || {},
+            tolerations: spec.tolerations || [],
             containers: [
               {
                 name: "opensearch",
@@ -157,8 +169,6 @@ class OpensearchOperator
                   initialDelaySeconds: 20, periodSeconds: 10, failureThreshold: 6
                 },
                 resources: spec.resources || {},
-                nodeSelector: spec.nodeSelector || {},
-                tolerations: spec.tolerations || [],
               },
             ],
           },
@@ -177,6 +187,19 @@ class OpensearchOperator
     statefulsets = @apps.resource("statefulsets", namespace:)
 
     upsert(statefulsets, body)
+  end
+
+  def owner_references(cluster)
+    [
+      {
+        apiVersion: cluster.apiVersion || "#{GROUP}/#{VERSION}",
+        kind: cluster.kind || "OpenSearchCluster",
+        name: cluster.metadata.name,
+        uid: cluster.metadata.uid,
+        controller: true,
+        blockOwnerDeletion: true,
+      },
+    ]
   end
 
   def upsert(client, resource_hash)
