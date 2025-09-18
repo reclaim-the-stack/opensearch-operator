@@ -1,0 +1,14 @@
+apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+kind: OpenSearchCluster
+metadata:
+  name: with-configs
+  namespace: default
+spec:
+  replicas: 3
+  diskSize: 5Gi
+  nodeSelector:
+    node-role.kubernetes.io/database: ""
+  tolerations:
+    - key: role
+      value: database
+      effect: NoSchedule

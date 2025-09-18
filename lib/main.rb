@@ -13,6 +13,7 @@ rescue LoadError
 end
 
 require_relative "opensearch_operator/version"
+require_relative "opensearch_operator/template"
 require_relative "kubernetes"
 
 Kubernetes.field_manager = "opensearch-operator"
@@ -21,12 +22,6 @@ $stdout.sync = true
 LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "DEBUG").upcase)
 
 class OpensearchOperator
-  TEMPLATES = Dir.glob(File.join(__dir__, "..", "templates", "*.yaml"))
-    .each_with_object({}) do |file, hash|
-      name = File.basename(file, ".yaml")
-      hash[name] = File.read(file)
-    end.freeze
-
   CLUSTERS_RESOURCE = Kubernetes::Resource.new(
     "opensearchclusters",
     group: "opensearch.reclaim-the-stack.com",
@@ -122,7 +117,7 @@ class OpensearchOperator
     # TODO: Move to a separate watch loops
     statefulset = Kubernetes.statefulsets.get(name, namespace:)
 
-    ready = statefulset.dig("status", "readyReplicas")
+    ready = statefulset.dig("status", "readyReplicas") || 0
     phase = ready >= cluster.dig("spec", "replicas") ? "Ready" : "Reconciling"
     patch = {
       status: {
@@ -138,19 +133,17 @@ class OpensearchOperator
   def finalize(cluster)
     # For now: do nothing (let GC handle child resources or add OwnerReferences).
     # Optional: implement PVC cleanup behind a finalizer.
-    LOGGER.info "Finalized #{cluster.metadata.namespace}/#{cluster.metadata.name}"
+    LOGGER.info "Finalized #{cluster.dig('metadata', 'namespace')}/#{cluster.dig('metadata', 'name')}"
   end
 
   def ensure_service(namespace, name, cluster)
     owner_references = owner_references(cluster).to_json
 
-    service_template = format(
-      TEMPLATES.fetch("service"),
+    service = Template["service"].render(
       name:,
       namespace:,
       owner_references:,
     )
-    service = YAML.safe_load(service_template)
 
     Kubernetes.services.apply(service)
   end
@@ -158,7 +151,9 @@ class OpensearchOperator
   def ensure_statefulset(namespace, name, cluster)
     spec = cluster.fetch("spec")
 
+    creation_timestamp_epoch = Time.parse(cluster.dig("metadata", "creationTimestamp")).to_i
     image = spec.fetch("image")
+    version = image.split(":").last
     replicas = spec.fetch("replicas")
     disk_size = spec.fetch("diskSize")
     node_selector = spec["nodeSelector"].to_json
@@ -166,11 +161,12 @@ class OpensearchOperator
     resources = spec["resources"].to_json
     owner_references = owner_references(cluster).to_json
 
-    statefulset_template = format(
-      TEMPLATES.fetch("statefulset"),
+    statefulset = Template["statefulset"].render(
       name:,
       namespace:,
+      creation_timestamp_epoch:,
       image:,
+      version:,
       replicas:,
       disk_size:,
       node_selector:,
@@ -178,7 +174,6 @@ class OpensearchOperator
       resources:,
       owner_references:,
     )
-    statefulset = YAML.safe_load(statefulset_template)
 
     Kubernetes.statefulsets.apply(statefulset)
   end

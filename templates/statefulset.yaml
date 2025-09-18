@@ -4,32 +4,88 @@ metadata:
   name: %{name}
   namespace: %{namespace}
   labels:
-    app.kubernetes.io/name: %{name}
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: opensearch-%{name}
+    app.kubernetes.io/version: %{version}
+    app.kubernetes.io/part-of: %{name}
+    app.kubernetes.io/managed-by: opensearch-operator
+    opensearch.reclaim-the-stack.com/cluster: %{name}
   ownerReferences: %{owner_references}
 spec:
-  serviceName: %{name}
+  serviceName: opensearch-%{name}
   replicas: %{replicas}
   selector:
     matchLabels:
-      app.kubernetes.io/name: %{name}
+      opensearch.reclaim-the-stack.com/cluster: %{name}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: %{name}
+        opensearch.reclaim-the-stack.com/cluster: %{name}
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: opensearch.reclaim-the-stack.com/cluster
+                    operator: In
+                    values:
+                      - %{name}
+              topologyKey: kubernetes.io/hostname
       nodeSelector: %{node_selector}
       tolerations: %{tolerations}
       containers:
         - name: opensearch
           image: %{image}
+          command:
+            - bash
+            - -c
+            - |
+              # Simplest possible way to guesstimate if we need to set cluster.initial_cluster_manager_nodes or not
+              # If the cluster is being created now (within the last 5 minutes), we set it
+              # If the cluster was created more than 5 minutes ago, we assume it's already formed
+              CLUSTER_CREATED_TIMESTAMP=%{creation_timestamp_epoch}
+              CURRENT_TIMESTAMP=$(date +%s)
+              if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
+                echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
+                INITIAL_CLUSTER_MANAGER_NODES=%{name}-0
+              else
+                echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
+              fi
+
+              # Assume 3 replicas for clustering
+              SEED_HOSTS=""
+              for i in 0 1 2; do
+                HOST="%{name}-$i.opensearch-%{name}.%{namespace}.svc.cluster.local"
+                if [ -z "$SEED_HOSTS" ]; then
+                  SEED_HOSTS="$HOST"
+                else
+                  SEED_HOSTS="$SEED_HOSTS,$HOST"
+                fi
+              done
+
+              # append to config/opensearch.yml
+              echo "network.host: 0.0.0.0" > config/opensearch.yml
+              echo "cluster.name: %{name}" >> config/opensearch.yml
+              echo "node.name: $HOSTNAME" >> config/opensearch.yml
+              echo "plugins.security.disabled: true" >> config/opensearch.yml
+              echo "discovery.seed_hosts: $SEED_HOSTS" >> config/opensearch.yml
+              if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
+                echo "cluster.initial_cluster_manager_nodes: [$INITIAL_CLUSTER_MANAGER_NODES]" >> config/opensearch.yml
+              fi
+
+              echo "Starting OpenSearch with config:"
+              cat config/opensearch.yml
+
+              exec opensearch
           ports:
             - name: "http"
               containerPort: 9200
           env: [
             # MVP runs single-node; remove this once you add real clustering logic
-            { name: "discovery.type", value: "single-node" },
+            #{ name: "discovery.type", value: "single-node" },
             { name: "OPENSEARCH_JAVA_OPTS", value: "-Xms512m -Xmx512m" },
-            { name: "DISABLE_SECURITY_PLUGIN", value: "true" },
+            #{ name: "DISABLE_SECURITY_PLUGIN", value: "true" },
           ]
           volumeMounts:
             - name: "data"

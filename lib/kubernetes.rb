@@ -285,13 +285,15 @@ module Kubernetes
 
     private
 
-    STANDARD_ERROR_AND_MAYBE_IRB_ABORT = [StandardError].freeze
-    STANDARD_ERROR_AND_MAYBE_IRB_ABORT << IRB::Abort if defined?(IRB::Abort)
+    STANDARD_ERROR_AND_MAYBE_IRB_ABORT = [StandardError, defined?(IRB::Abort) && IRB::Abort].compact.freeze
 
     def request(method, path, params = {}, &)
       connection_pool.with do |connection|
         LOGGER.debug "[Kubernetes] #{method.upcase} #{path}"
         connection.send(method, path, params, &)
+      rescue Errno::EBADF
+        # This has happened a few times, not sure why, maybe because I'm on a lousy mobile connection?
+        debugger if defined?(debugger) # rubocop:disable Lint/Debugger
       rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT
         connection&.close
         connection_pool.discard_current_connection

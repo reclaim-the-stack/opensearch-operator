@@ -1,16 +1,19 @@
+# Headless service for the statefulset
+
 apiVersion: v1
 kind: Service
 metadata:
-  name: %{name}
+  name: opensearch-%{name}
   namespace: %{namespace}
   labels:
-    app.kubernetes.io/name: %{name}
+    opensearch.reclaim-the-stack.com/cluster: %{name}
   ownerReferences: %{owner_references}
 spec:
   type: ClusterIP
+  clusterIP: None
   ports:
     - name: "http"
       port: 9200
       targetPort: 9200
   selector:
-    app.kubernetes.io/name: %{name}
+    opensearch.reclaim-the-stack.com/cluster: %{name}

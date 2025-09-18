@@ -4,5 +4,5 @@ metadata:
   name: simple
   namespace: default
 spec:
-  replicas: 1
+  replicas: 3
   diskSize: 5Gi
