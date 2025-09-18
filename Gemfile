@@ -3,7 +3,7 @@
 source "https://rubygems.org"
 
 gem "activesupport"
-gem "k8s-ruby"
+gem "connection_pool"
 
 group :development, :test do
   gem "debug"

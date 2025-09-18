@@ -2,72 +2,92 @@
 
 require "bundler/setup"
 
+require "active_support/all"
 require "json"
 require "logger"
-require "k8s-ruby"
+
+begin
+  require "debug"
+rescue LoadError
+  # only available in development / test environments
+end
 
 require_relative "opensearch_operator/version"
+require_relative "kubernetes"
 
-K8s::Logging.debug!
-K8s::Transport.verbose!
+Kubernetes.field_manager = "opensearch-operator"
 
 $stdout.sync = true
-LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "INFO").upcase)
+LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "DEBUG").upcase)
 
 class OpensearchOperator
-  FIELD_MANAGER = "opensearch-operator"
-  GROUP = "opensearch.reclaim-the-stack.com"
-  VERSION = "v1alpha1"
-  PLURAL = "opensearchclusters"
+  TEMPLATES = Dir.glob(File.join(__dir__, "..", "templates", "*.yaml"))
+    .each_with_object({}) do |file, hash|
+      name = File.basename(file, ".yaml")
+      hash[name] = File.read(file)
+    end.freeze
+
+  CLUSTERS_RESOURCE = Kubernetes::Resource.new(
+    "opensearchclusters",
+    group: "opensearch.reclaim-the-stack.com",
+    version: "v1alpha1",
+  )
 
   def initialize
-    @client = begin
-      K8s::Client.in_cluster_config
-    rescue K8s::Error::Configuration
-      LOGGER.warn "Falling back to local kubeconfig"
-      K8s::Client.config(K8s::Config.load_file(ENV["KUBECONFIG"] || File.join(Dir.home, ".kube", "config")))
-    end
-    @clusters = @client.api("#{GROUP}/#{VERSION}").resource(PLURAL)
-    @core = @client.api("v1")
-    @apps = @client.api("apps/v1")
+    @clusters = []
+    @stopping = false
   end
 
   def run
     setup_signal_traps
-    LOGGER.info "Starting watch on #{PLURAL}.#{GROUP}/#{VERSION}"
+    # Initial list to get current resourceVersion
+    clusters_response = CLUSTERS_RESOURCE.list
 
-    @clusters.watch do |event|
-      resource = event.resource
-      next if resource.nil?
+    @clusters = clusters_response.fetch("items")
 
-      LOGGER.info "#{event.type} #{resource.metadata.namespace}/#{resource.metadata.name}"
+    @clusters.each do |cluster|
+      reconcile(cluster)
+    end
 
-      case event.type # "ADDED", "MODIFIED", "DELETED", "BOOKMARK", "ERROR"
-      when "ADDED", "MODIFIED"
-        reconcile(resource)
-      when "DELETED"
-        finalize(resource)
+    resource_version = clusters_response.dig("metadata", "resourceVersion")
+    LOGGER.info "Starting watch on OpenSearchClusters from resource_version=#{resource_version}"
+
+    until @stopping
+      CLUSTERS_RESOURCE.watch(resource_version:) do |event|
+        break if @stopping
+
+        type = event.fetch("type")
+        cluster = event.fetch("object")
+        name = cluster.dig("metadata", "name")
+        resource_version = cluster.dig("metadata", "resourceVersion")
+
+        LOGGER.info "event=#{type} name=#{name} resource_version=#{resource_version}"
+
+        case type
+        when "ADDED", "MODIFIED"
+          reconcile(cluster)
+        when "DELETED"
+          finalize(cluster)
+        when "ERROR"
+          message = "Watch ERROR event: #{event}"
+          LOGGER.error message
+          raise message
+        end
       end
     end
-  rescue StandardError => e
-    if e.is_a?(OpenSSL::SSL::SSLErrorWaitReadable) && @stopping
-      # Ignore SSL errors during shutdown
-    else
-      LOGGER.error("Watch cluster crashed: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
-      sleep 2
-      retry
-    end
+
+    LOGGER.info "Shutdown complete"
   end
 
   def setup_signal_traps
     @stopping = false
     %w[INT TERM].each do |sig|
       Signal.trap(sig) do
-        unless @stopping
-          puts "Received #{sig}, shutting down..."
-          @stopping = true
-          exit
-        end
+        next if @stopping
+
+        puts "Received #{sig}, initiating shutdown..."
+        @stopping = true
+        exit # TODO: Gracefully
       end
     end
   end
@@ -75,29 +95,44 @@ class OpensearchOperator
   private
 
   def reconcile(cluster)
-    namespace = cluster.metadata.namespace || "default"
-    name = cluster.metadata.name
+    namespace = cluster.dig("metadata", "namespace")
+    name = cluster.dig("metadata", "name")
+
+    existing_cluster = @clusters.find do |existing_cluster|
+      existing_cluster.dig("metadata", "uid") == cluster.dig("metadata", "uid")
+    end
+
+    if existing_cluster
+      if existing_cluster.equal?(cluster)
+        # This is the initial list, we'll proceed to ensure resources exist
+      elsif existing_cluster["spec"] == cluster["spec"]
+        LOGGER.info "No changes in spec for #{namespace}/#{name}, skipping"
+        return
+      else
+        LOGGER.info "Spec changed for #{namespace}/#{name}, reconsiling"
+      end
+    else
+      @clusters << cluster
+    end
 
     ensure_statefulset(namespace, name, cluster)
     ensure_service(namespace, name, cluster)
 
-    # (Optional) update status
-    begin
-      statefulset = @apps.resource("statefulsets", namespace:).get(name)
+    # Update status
+    # TODO: Move to a separate watch loops
+    statefulset = Kubernetes.statefulsets.get(name, namespace:)
 
-      ready = statefulset.status&.readyReplicas.to_i
-      phase = ready >= cluster.spec.replicas ? "Ready" : "Reconciling"
+    ready = statefulset.dig("status", "readyReplicas")
+    phase = ready >= cluster.dig("spec", "replicas") ? "Ready" : "Reconciling"
+    patch = {
+      status: {
+        phase:,
+        nodes: ready,
+      },
+    }
 
-      # TODO: This 422s
-      json_patch = [
-        { op: "replace", path: "/status/phase", value: phase },
-        { op: "replace", path: "/status/nodes", value: ready },
-      ]
-
-      @clusters.json_patch(name, json_patch, namespace:)
-    rescue StandardError => e
-      LOGGER.warn "Status update failed: #{e.message}"
-    end
+    LOGGER.info "Updating status of #{namespace}/#{name} to phase=#{phase}, nodes=#{ready}"
+    CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: patch)
   end
 
   def finalize(cluster)
@@ -107,115 +142,58 @@ class OpensearchOperator
   end
 
   def ensure_service(namespace, name, cluster)
-    body = {
-      apiVersion: "v1", kind: "Service",
-      metadata: {
-        name:,
-        namespace:,
-        labels: { "app.kubernetes.io/name" => name },
-        ownerReferences: owner_references(cluster),
-      },
-      spec: {
-        type: "ClusterIP",
-        ports: [{ name: "http", port: 9200, targetPort: 9200 }],
-        selector: { "app.kubernetes.io/name" => name },
-      }
-    }
-    services = @core.resource("services", namespace:)
+    owner_references = owner_references(cluster).to_json
 
-    upsert(services, body)
+    service_template = format(
+      TEMPLATES.fetch("service"),
+      name:,
+      namespace:,
+      owner_references:,
+    )
+    service = YAML.safe_load(service_template)
+
+    Kubernetes.services.apply(service)
   end
 
   def ensure_statefulset(namespace, name, cluster)
-    spec = cluster.spec
+    spec = cluster.fetch("spec")
 
-    image = spec.image
-    replicas = spec.replicas
-    disk_size = spec.diskSize
+    image = spec.fetch("image")
+    replicas = spec.fetch("replicas")
+    disk_size = spec.fetch("diskSize")
+    node_selector = spec["nodeSelector"].to_json
+    tolerations = spec["tolerations"].to_json
+    resources = spec["resources"].to_json
+    owner_references = owner_references(cluster).to_json
 
-    body = {
-      apiVersion: "apps/v1", kind: "StatefulSet",
-      metadata: {
-        name:,
-        namespace:,
-        labels: { "app.kubernetes.io/name" => name },
-        ownerReferences: owner_references(cluster),
-      },
-      spec: {
-        serviceName: name,
-        replicas: replicas,
-        selector: { matchLabels: { "app.kubernetes.io/name" => name } },
-        template: {
-          metadata: { labels: { "app.kubernetes.io/name" => name } },
-          spec: {
-            nodeSelector: spec.nodeSelector || {},
-            tolerations: spec.tolerations || [],
-            containers: [
-              {
-                name: "opensearch",
-                image: image,
-                ports: [
-                  { name: "http", containerPort: 9200 },
-                ],
-                env: [
-                  # MVP runs single-node; remove this once you add real clustering logic
-                  { name: "discovery.type", value: "single-node" },
-                  { name: "OPENSEARCH_JAVA_OPTS", value: "-Xms512m -Xmx512m" },
-                  { name: "DISABLE_SECURITY_PLUGIN", value: "true" },
-                ],
-                volumeMounts: [{ name: "data", mountPath: "/usr/share/opensearch/data" }],
-                readinessProbe: {
-                  httpGet: { path: "/_cluster/health", port: 9200 },
-                  initialDelaySeconds: 20, periodSeconds: 10, failureThreshold: 6
-                },
-                resources: spec.resources || {},
-              },
-            ],
-          },
-        },
-        volumeClaimTemplates: [
-          {
-            metadata: { name: "data" },
-            spec: {
-              accessModes: ["ReadWriteOnce"],
-              resources: { requests: { storage: disk_size } },
-            },
-          },
-        ],
-      }
-    }
-    statefulsets = @apps.resource("statefulsets", namespace:)
+    statefulset_template = format(
+      TEMPLATES.fetch("statefulset"),
+      name:,
+      namespace:,
+      image:,
+      replicas:,
+      disk_size:,
+      node_selector:,
+      tolerations:,
+      resources:,
+      owner_references:,
+    )
+    statefulset = YAML.safe_load(statefulset_template)
 
-    upsert(statefulsets, body)
+    Kubernetes.statefulsets.apply(statefulset)
   end
 
   def owner_references(cluster)
     [
       {
-        apiVersion: cluster.apiVersion || "#{GROUP}/#{VERSION}",
-        kind: cluster.kind || "OpenSearchCluster",
-        name: cluster.metadata.name,
-        uid: cluster.metadata.uid,
-        controller: true,
-        blockOwnerDeletion: true,
+        "apiVersion" => cluster.fetch("apiVersion"),
+        "kind" => cluster.fetch("kind"),
+        "name" => cluster.dig("metadata", "name"),
+        "uid" => cluster.dig("metadata", "uid"),
+        "controller" => true,
+        "blockOwnerDeletion" => true,
       },
     ]
-  end
-
-  def upsert(client, resource_hash)
-    resource = K8s::Resource.new(resource_hash)
-    existing = begin
-      client.get(resource.metadata.name, namespace: resource.metadata.namespace)
-    rescue K8s::Error::NotFound
-      nil
-    end
-
-    if existing.nil?
-      client.create_resource(resource)
-    else
-      #resource.metadata.resourceVersion = existing.metadata.resourceVersion
-      client.update_resource(resource)
-    end
   end
 end
 
