@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards-%{name}
+  namespace: %{namespace}
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+    opensearch.reclaim-the-stack.com/cluster: %{name}
+  ownerReferences: %{owner_references}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch-dashboards
+      opensearch.reclaim-the-stack.com/cluster: %{name}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch-dashboards
+        opensearch.reclaim-the-stack.com/cluster: %{name}
+    spec:
+      containers:
+        - name: dashboards
+          image: %{dashboards_image}
+          ports:
+            - name: http
+              containerPort: 5601
+          env:
+            - name: OPENSEARCH_HOSTS
+              value: "%{opensearch_hosts}"
+            - name: DISABLE_SECURITY_DASHBOARDS_PLUGIN
+              value: "true"
+          livenessProbe:
+            failureThreshold: 10
+            httpGet:
+              path: /api/reporting/stats
+              port: 5601
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            successThreshold: 1
+            timeoutSeconds: 5

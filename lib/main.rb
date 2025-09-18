@@ -112,6 +112,8 @@ class OpensearchOperator
 
     ensure_statefulset(namespace, name, cluster)
     ensure_service(namespace, name, cluster)
+    ensure_dashboards_deployment(namespace, name, cluster)
+    ensure_dashboards_service(namespace, name, cluster)
 
     # Update status
     # TODO: Move to a separate watch loops
@@ -146,6 +148,38 @@ class OpensearchOperator
     )
 
     Kubernetes.services.apply(service)
+  end
+
+  def ensure_dashboards_service(namespace, name, cluster)
+    owner_references_json = owner_references(cluster).to_json
+
+    service = Template["dashboards_service"].render(
+      name:,
+      namespace:,
+      owner_references: owner_references_json,
+    )
+
+    Kubernetes.services.apply(service)
+  end
+
+  def ensure_dashboards_deployment(namespace, name, cluster)
+    spec = cluster.fetch("spec")
+
+    image = spec.fetch("image")
+    version = image.include?(":") ? image.split(":").last : "latest"
+    dashboards_image = "opensearchproject/opensearch-dashboards:#{version}"
+    opensearch_hosts = "http://opensearch-#{name}:9200"
+    owner_references_json = owner_references(cluster).to_json
+
+    deployment = Template["dashboards_deployment"].render(
+      name:,
+      namespace:,
+      dashboards_image:,
+      opensearch_hosts:,
+      owner_references: owner_references_json,
+    )
+
+    Kubernetes.deployments.apply(deployment)
   end
 
   def ensure_statefulset(namespace, name, cluster)
