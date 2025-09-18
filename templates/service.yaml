@@ -15,5 +15,8 @@ spec:
     - name: "http"
       port: 9200
       targetPort: 9200
+    - name: "transport"
+      port: 9300
+      targetPort: 9300
   selector:
     opensearch.reclaim-the-stack.com/cluster: %{name}
