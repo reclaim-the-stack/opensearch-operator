@@ -119,12 +119,20 @@ class OpensearchOperator
     # TODO: Move to a separate watch loops
     statefulset = Kubernetes.statefulsets.get(name, namespace:)
 
+    spec = cluster.fetch("spec")
+
+    image = spec.fetch("image")
+    version = image.split(":").last
+    replicas = spec.fetch("replicas")
+
     ready = statefulset.dig("status", "readyReplicas") || 0
-    phase = ready >= cluster.dig("spec", "replicas") ? "Ready" : "Reconciling"
+    phase = ready >= replicas ? "Ready" : "Reconciling"
+
     patch = {
       status: {
         phase:,
         nodes: ready,
+        version:,
       },
     }
 
