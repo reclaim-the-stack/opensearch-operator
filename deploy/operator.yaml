@@ -21,7 +21,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: operator
-          image: ghcr.io/reclaim-the-stack/opensearch-operator:0.1.1
+          image: ghcr.io/reclaim-the-stack/opensearch-operator:0.1.3
           command: [ruby, lib/main.rb]
           imagePullPolicy: IfNotPresent
           securityContext:
