@@ -72,8 +72,8 @@ class OpensearchOperator
         if changed_keys.any?
           @state = new_state
 
-          changes = changed_keys.map { |key| "#{key}=#{new_state[key]}" }.join(" ")
-          LOGGER.info "class=OpensearchWatcher action=state-changed url=#{@url} changes=#{changes.join(',')}"
+          changes = changed_keys.map { |key| "#{key}=#{new_state[key]}" }.join(",")
+          LOGGER.info "class=OpensearchWatcher action=state-changed url=#{@url} changes=#{changes}"
 
           yield(new_state, changed_keys)
         end

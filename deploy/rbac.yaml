@@ -18,7 +18,7 @@ rules:
     resources: ["pods","services","endpoints","configmaps","persistentvolumeclaims","events","secrets"]
     verbs: ["get","list","watch","create","update","patch","delete"]
   - apiGroups: ["apps"]
-    resources: ["statefulsets"]
+    resources: ["deployments","statefulsets"]
     verbs: ["get","list","watch","create","update","patch","delete"]
   - apiGroups: ["opensearch.reclaim-the-stack.com"]
     resources: ["opensearchclusters","opensearchclusters/status","opensearchclusters/finalizers"]
