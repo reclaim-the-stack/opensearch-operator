@@ -56,7 +56,7 @@ spec:
               # Assume 3 replicas for clustering
               SEED_HOSTS=""
               for i in 0 1 2; do
-                HOST='"%{name}-$i.opensearch-%{name}.%{namespace}.svc.cluster.local"'
+                HOST="\"%{name}-$i.opensearch-%{name}.%{namespace}.svc.cluster.local\""
                 if [ -z "$SEED_HOSTS" ]; then
                   SEED_HOSTS="$HOST"
                 else
