@@ -289,7 +289,7 @@ module Kubernetes
 
     def request(method, path, params = {}, &)
       connection_pool.with do |connection|
-        LOGGER.debug "[Kubernetes] #{method.upcase} #{path}"
+        LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
       rescue Errno::EBADF
         # This has happened a few times, not sure why, maybe because I'm on a lousy mobile connection?

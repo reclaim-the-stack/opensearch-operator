@@ -2,9 +2,11 @@
 
 require "bundler/setup"
 
-require "active_support/all"
 require "json"
 require "logger"
+
+require "active_support/all"
+require "concurrent"
 
 begin
   require "debug"
@@ -12,8 +14,8 @@ rescue LoadError
   # only available in development / test environments
 end
 
-require_relative "opensearch_operator/version"
 require_relative "opensearch_operator/template"
+require_relative "opensearch_operator/opensearch_watcher"
 require_relative "kubernetes"
 
 Kubernetes.field_manager = "opensearch-operator"
@@ -27,10 +29,13 @@ class OpensearchOperator
     group: "opensearch.reclaim-the-stack.com",
     version: "v1alpha1",
   )
+  HEALTH_POLL_INTERVAL = 15
 
   def initialize
-    @clusters = []
+    @clusters = Concurrent::Hash.new # uid => cluster
+    @cluster_watchers = Concurrent::Hash.new # uid => OpensearchWatcher
     @stopping = false
+    @monitor_thread = nil
   end
 
   def run
@@ -38,14 +43,14 @@ class OpensearchOperator
     # Initial list to get current resourceVersion
     clusters_response = CLUSTERS_RESOURCE.list
 
-    @clusters = clusters_response.fetch("items")
+    initial_clusters = clusters_response.fetch("items")
 
-    @clusters.each do |cluster|
+    initial_clusters.each do |cluster|
       reconcile(cluster)
     end
 
     resource_version = clusters_response.dig("metadata", "resourceVersion")
-    LOGGER.info "Starting watch on OpenSearchClusters from resource_version=#{resource_version}"
+    LOGGER.info "class=OpensearchOperator action=watching resource_version=#{resource_version}"
 
     until @stopping
       CLUSTERS_RESOURCE.watch(resource_version:) do |event|
@@ -70,8 +75,6 @@ class OpensearchOperator
         end
       end
     end
-
-    LOGGER.info "Shutdown complete"
   end
 
   def setup_signal_traps
@@ -92,10 +95,9 @@ class OpensearchOperator
   def reconcile(cluster)
     namespace = cluster.dig("metadata", "namespace")
     name = cluster.dig("metadata", "name")
+    uid = cluster_uid(cluster)
 
-    existing_cluster = @clusters.find do |existing_cluster|
-      existing_cluster.dig("metadata", "uid") == cluster.dig("metadata", "uid")
-    end
+    existing_cluster = @clusters[uid]
 
     if existing_cluster
       if existing_cluster.equal?(cluster)
@@ -107,43 +109,54 @@ class OpensearchOperator
         LOGGER.info "Spec changed for #{namespace}/#{name}, reconsiling"
       end
     else
-      @clusters << cluster
+      # CLUSTER_URL_OVERRIDE can be used for testing with port-forwarded clusters
+      cluster_url = ENV["CLUSTER_URL_OVERRIDE"] || "http://opensearch-#{name}.#{namespace}.svc.cluster.local:9200"
+      watcher = OpensearchWatcher.new(cluster_url).run do |new_state, changed_keys|
+        update_status(uid, new_state, changed_keys)
+      end
+      @cluster_watchers[uid] = watcher
     end
+
+    @clusters[uid] = cluster
 
     ensure_statefulset(namespace, name, cluster)
     ensure_service(namespace, name, cluster)
     ensure_dashboards_deployment(namespace, name, cluster)
     ensure_dashboards_service(namespace, name, cluster)
-
-    # Update status
-    # TODO: Move to a separate watch loops
-    statefulset = Kubernetes.statefulsets.get(name, namespace:)
-
-    spec = cluster.fetch("spec")
-
-    image = spec.fetch("image")
-    version = image.split(":").last
-    replicas = spec.fetch("replicas")
-
-    ready = statefulset.dig("status", "readyReplicas") || 0
-    phase = ready >= replicas ? "Ready" : "Reconciling"
-
-    patch = {
-      status: {
-        phase:,
-        nodes: ready,
-        version:,
-      },
-    }
-
-    LOGGER.info "Updating status of #{namespace}/#{name} to phase=#{phase}, nodes=#{ready}"
-    CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: patch)
   end
 
   def finalize(cluster)
-    # For now: do nothing (let GC handle child resources or add OwnerReferences).
-    # Optional: implement PVC cleanup behind a finalizer.
+    cluster_uid(cluster)
+    @clusters.delete(uid)
+    watcher = @cluster_watchers.delete(uid)
+    watcher&.stop
+
     LOGGER.info "Finalized #{cluster.dig('metadata', 'namespace')}/#{cluster.dig('metadata', 'name')}"
+  end
+
+  KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
+
+  # TODO: Maybe we should label which pod is master / manager?
+  def update_status(cluster_uid, new_state, changed_keys)
+    return unless changed_keys.intersect?(KEYS_AFFECTING_STATUS)
+
+    cluster = @clusters[cluster_uid]
+    return unless cluster
+
+    namespace = cluster.dig("metadata", "namespace")
+    name = cluster.dig("metadata", "name")
+
+    params = {
+      status: {
+        health: new_state[:status]&.capitalize,
+        nodes: new_state[:number_of_nodes],
+        version: new_state[:version],
+      },
+    }
+
+    CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params:)
+  rescue StandardError => e
+    LOGGER.error "Failed to update status for #{namespace}/#{name}: #{e.class}: #{e.message}"
   end
 
   def ensure_service(namespace, name, cluster)
@@ -218,6 +231,10 @@ class OpensearchOperator
     )
 
     Kubernetes.statefulsets.apply(statefulset)
+  end
+
+  def cluster_uid(cluster)
+    cluster.dig("metadata", "uid")
   end
 
   def owner_references(cluster)
