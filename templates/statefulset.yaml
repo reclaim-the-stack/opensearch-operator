@@ -53,16 +53,8 @@ spec:
                 echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
               fi
 
-              # Assume 3 replicas for clustering
-              SEED_HOSTS=""
-              for i in 0 1 2; do
-                HOST="\"%{name}-$i.opensearch-%{name}.%{namespace}.svc.cluster.local\""
-                if [ -z "$SEED_HOSTS" ]; then
-                  SEED_HOSTS="$HOST"
-                else
-                  SEED_HOSTS="$SEED_HOSTS,$HOST"
-                fi
-              done
+              # Seed hosts via the headless service
+              SEED_HOSTS='"opensearch-%{name}.default.svc.cluster.local"'
 
               # append to config/opensearch.yml
               echo "network.host: 0.0.0.0" > config/opensearch.yml
