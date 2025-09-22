@@ -51,6 +51,18 @@ spec:
                 resources:
                   type: object
                   description: Pod resources (limits/requests)
+                  properties:
+                    limits:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: Describes the maximum amount of compute resources allowed.
+                    requests:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: Describes the minimum amount of compute resources required.
+                  additionalProperties: false
                 nodeSelector:
                   type: object
                   additionalProperties:
