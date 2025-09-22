@@ -48,7 +48,7 @@ spec:
               CURRENT_TIMESTAMP=$(date +%s)
               if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
                 echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
-                INITIAL_CLUSTER_MANAGER_NODES=%{name}-0
+                INITIAL_CLUSTER_MANAGER_NODES='"%{name}-0"'
               else
                 echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
               fi
@@ -56,7 +56,7 @@ spec:
               # Assume 3 replicas for clustering
               SEED_HOSTS=""
               for i in 0 1 2; do
-                HOST="%{name}-$i.opensearch-%{name}.%{namespace}.svc.cluster.local"
+                HOST='"%{name}-$i.opensearch-%{name}.%{namespace}.svc.cluster.local"'
                 if [ -z "$SEED_HOSTS" ]; then
                   SEED_HOSTS="$HOST"
                 else
@@ -69,7 +69,7 @@ spec:
               echo "cluster.name: %{name}" >> config/opensearch.yml
               echo "node.name: $HOSTNAME" >> config/opensearch.yml
               echo "plugins.security.disabled: true" >> config/opensearch.yml
-              echo "discovery.seed_hosts: $SEED_HOSTS" >> config/opensearch.yml
+              echo "discovery.seed_hosts: [$SEED_HOSTS]" >> config/opensearch.yml
               if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
                 echo "cluster.initial_cluster_manager_nodes: [$INITIAL_CLUSTER_MANAGER_NODES]" >> config/opensearch.yml
               fi

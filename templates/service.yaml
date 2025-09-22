@@ -18,5 +18,7 @@ spec:
     - name: "transport"
       port: 9300
       targetPort: 9300
+  publishNotReadyAddresses: true
   selector:
+    app.kubernetes.io/name: opensearch
     opensearch.reclaim-the-stack.com/cluster: %{name}
