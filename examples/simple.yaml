@@ -1,5 +1,5 @@
 apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
-kind: OpenSearchCluster
+kind: OpenSearch
 metadata:
   name: simple
   namespace: default

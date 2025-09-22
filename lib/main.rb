@@ -25,7 +25,7 @@ LOGGER = Logger.new $stdout, level: Logger.const_get((ENV["LOG_LEVEL"] || "DEBUG
 
 class OpensearchOperator
   CLUSTERS_RESOURCE = Kubernetes::Resource.new(
-    "opensearchclusters",
+    "opensearches",
     group: "opensearch.reclaim-the-stack.com",
     version: "v1alpha1",
   )
