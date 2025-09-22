@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: opensearch-system
+  name: opensearch-operator
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: opensearch-operator
-  namespace: opensearch-system
+  namespace: opensearch-operator
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -35,4 +35,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: opensearch-operator
-    namespace: opensearch-system
+    namespace: opensearch-operator
