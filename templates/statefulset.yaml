@@ -20,6 +20,11 @@ spec:
   template:
     metadata:
       labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/instance: opensearch-%{name}
+        app.kubernetes.io/version: %{version}
+        app.kubernetes.io/part-of: %{name}
+        app.kubernetes.io/managed-by: opensearch-operator
         opensearch.reclaim-the-stack.com/cluster: %{name}
     spec:
       affinity:
