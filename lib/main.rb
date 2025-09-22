@@ -126,7 +126,7 @@ class OpensearchOperator
   end
 
   def finalize(cluster)
-    cluster_uid(cluster)
+    uid = cluster_uid(cluster)
     @clusters.delete(uid)
     watcher = @cluster_watchers.delete(uid)
     watcher&.stop
