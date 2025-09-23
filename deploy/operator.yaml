@@ -22,7 +22,6 @@ spec:
       containers:
         - name: operator
           image: ghcr.io/reclaim-the-stack/opensearch-operator:0.1.13
-          command: [ruby, lib/main.rb]
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
