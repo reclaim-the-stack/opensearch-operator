@@ -13,6 +13,8 @@ metadata:
   ownerReferences: %{owner_references}
 spec:
   serviceName: opensearch-%{name}
+  # To reach quorum during bootstrapping we can't wait for each pod to be ready before starting the next
+  podManagementPolicy: Parallel
   replicas: %{replicas}
   selector:
     matchLabels:
