@@ -119,8 +119,8 @@ class OpensearchOperator
 
     @clusters[uid] = cluster
 
-    ensure_statefulset(namespace, name, cluster)
     ensure_service(namespace, name, cluster)
+    ensure_statefulset(namespace, name, cluster)
     ensure_dashboards_deployment(namespace, name, cluster)
     ensure_dashboards_service(namespace, name, cluster)
   end
@@ -171,6 +171,36 @@ class OpensearchOperator
     Kubernetes.services.apply(service)
   end
 
+  def ensure_statefulset(namespace, name, cluster)
+    spec = cluster.fetch("spec")
+
+    creation_timestamp_epoch = Time.parse(cluster.dig("metadata", "creationTimestamp")).to_i
+    image = spec.fetch("image")
+    version = image.split(":").last
+    replicas = spec.fetch("replicas")
+    disk_size = spec.fetch("diskSize")
+    node_selector = spec["nodeSelector"].to_json
+    tolerations = spec["tolerations"].to_json
+    resources = spec["resources"].to_json
+    owner_references = owner_references(cluster).to_json
+
+    statefulset = Template["statefulset"].render(
+      name:,
+      namespace:,
+      creation_timestamp_epoch:,
+      image:,
+      version:,
+      replicas:,
+      disk_size:,
+      node_selector:,
+      tolerations:,
+      resources:,
+      owner_references:,
+    )
+
+    Kubernetes.statefulsets.apply(statefulset)
+  end
+
   def ensure_dashboards_service(namespace, name, cluster)
     owner_references_json = owner_references(cluster).to_json
 
@@ -201,36 +231,6 @@ class OpensearchOperator
     )
 
     Kubernetes.deployments.apply(deployment)
-  end
-
-  def ensure_statefulset(namespace, name, cluster)
-    spec = cluster.fetch("spec")
-
-    creation_timestamp_epoch = Time.parse(cluster.dig("metadata", "creationTimestamp")).to_i
-    image = spec.fetch("image")
-    version = image.split(":").last
-    replicas = spec.fetch("replicas")
-    disk_size = spec.fetch("diskSize")
-    node_selector = spec["nodeSelector"].to_json
-    tolerations = spec["tolerations"].to_json
-    resources = spec["resources"].to_json
-    owner_references = owner_references(cluster).to_json
-
-    statefulset = Template["statefulset"].render(
-      name:,
-      namespace:,
-      creation_timestamp_epoch:,
-      image:,
-      version:,
-      replicas:,
-      disk_size:,
-      node_selector:,
-      tolerations:,
-      resources:,
-      owner_references:,
-    )
-
-    Kubernetes.statefulsets.apply(statefulset)
   end
 
   def cluster_uid(cluster)
