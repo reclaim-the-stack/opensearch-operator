@@ -26,6 +26,7 @@ class OpensearchOperator
 
     def initialize(url)
       @url = url
+      @url_without_basicauth = url.sub(%r{^(https?://)([^/@]+@)?}, '\1')
       @client = OpenSearch::Client.new(url:, transport_options: { ssl: { verify: false } })
       @state = {
         number_of_nodes: nil,
@@ -73,12 +74,12 @@ class OpensearchOperator
           @state = new_state
 
           changes = changed_keys.map { |key| "#{key}=#{new_state[key]}" }.join(",")
-          LOGGER.info "class=OpensearchWatcher action=state-changed url=#{@url} changes=#{changes}"
+          LOGGER.info "class=OpensearchWatcher action=state-changed url=#{@url_without_basicauth} changes=#{changes}"
 
           yield(new_state, changed_keys)
         end
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
-        LOGGER.warn "class=OpensearchWatcher error=#{e.class} url=#{@url} message=#{e.message}"
+        LOGGER.warn "class=OpensearchWatcher error=#{e.class} url=#{@url_without_basicauth} message=#{e.message}"
       ensure
         sleep CHECK_INTERVAL
       end

@@ -52,27 +52,25 @@ class OpensearchOperator
     resource_version = clusters_response.dig("metadata", "resourceVersion")
     LOGGER.info "class=OpensearchOperator action=watching resource_version=#{resource_version}"
 
-    until @stopping
-      CLUSTERS_RESOURCE.watch(resource_version:) do |event|
-        break if @stopping
+    CLUSTERS_RESOURCE.watch(resource_version:) do |event|
+      break if @stopping
 
-        type = event.fetch("type")
-        cluster_manifest = event.fetch("object")
-        name = cluster_manifest.dig("metadata", "name")
-        resource_version = cluster_manifest.dig("metadata", "resourceVersion")
+      type = event.fetch("type")
+      cluster_manifest = event.fetch("object")
+      name = cluster_manifest.dig("metadata", "name")
+      resource_version = cluster_manifest.dig("metadata", "resourceVersion")
 
-        LOGGER.info "event=#{type} name=#{name} resource_version=#{resource_version}"
+      LOGGER.info "event=#{type} name=#{name} resource_version=#{resource_version}"
 
-        case type
-        when "ADDED", "MODIFIED"
-          reconcile(cluster_manifest)
-        when "DELETED"
-          finalize(cluster_manifest)
-        when "ERROR"
-          message = "Watch ERROR event: #{event}"
-          LOGGER.error message
-          raise message
-        end
+      case type
+      when "ADDED", "MODIFIED"
+        reconcile(cluster_manifest)
+      when "DELETED"
+        finalize(cluster_manifest)
+      when "ERROR"
+        message = "Watch ERROR event: #{event}"
+        LOGGER.error message
+        raise message
       end
     end
   end

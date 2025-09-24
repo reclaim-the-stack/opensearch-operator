@@ -138,11 +138,8 @@ module Kubernetes
 
               event = JSON.parse(line)
 
-              if event["type"] == "BOOKMARK"
-                # Don't bother the caller with bookmark events, we only use them for resourceVersion updates
-              else
-                yield event
-              end
+              # Don't bother the caller with bookmark events, we only use them for resourceVersion updates
+              yield event unless event["type"] == "BOOKMARK"
 
               new_resource_version = event.dig("object", "metadata", "resourceVersion")
               params[:resourceVersion] = new_resource_version if new_resource_version
@@ -154,7 +151,7 @@ module Kubernetes
           end
         end
       rescue Error, *TRANSIENT_NET_ERRORS => e
-        warn "class=Kubernetes::Resource message=watch-error error_class=#{e.class} error_message=#{e.message}"
+        LOGGER.error "class=Kubernetes::Resource message=watch-error error_class=#{e.class} error_message=#{e.message}"
         sleep 5
         retry
       end
@@ -297,10 +294,6 @@ module Kubernetes
       connection_pool.with do |connection|
         LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
-      rescue Errno::EBADF
-        # This has happened a few times, not sure why, maybe because I'm on a lousy mobile connection?
-        connection.restart
-        retry if (attempt += 1) < 2
       rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT
         connection&.close
         connection_pool.discard_current_connection
