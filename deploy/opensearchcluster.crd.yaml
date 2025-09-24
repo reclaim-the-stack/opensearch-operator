@@ -42,7 +42,7 @@ spec:
                   type: string
                   description: OpenSearch image (e.g., opensearchproject/opensearch:<major>.<minor>.<patch>)
                   default: opensearchproject/opensearch:3.2.0
-                  pattern: :[0-9]+\.[0-9]+\.[0-9]$ # validate that the tag is in semver format
+                  pattern: :[0-9]+\.[0-9]+\.[0-9]+$ # validate that the tag is in semver format
                 replicas:
                   type: integer
                   minimum: 3
