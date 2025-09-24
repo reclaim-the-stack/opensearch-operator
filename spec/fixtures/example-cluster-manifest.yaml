@@ -1,0 +1,24 @@
+apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+kind: OpenSearch
+metadata:
+  name: example
+  namespace: default
+  uid: 123e4567-e89b-12d3-a456-426614174000
+  creationTimestamp: "2025-09-01T12:00:00Z"
+spec:
+  image: opensearchproject/opensearch:3.1.0
+  replicas: 3
+  diskSize: 5Gi
+  nodeSelector:
+    node-role.kubernetes.io/database: ""
+  tolerations:
+    - key: role
+      value: database
+      effect: NoSchedule
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 4Gi
+      cpu: 1
