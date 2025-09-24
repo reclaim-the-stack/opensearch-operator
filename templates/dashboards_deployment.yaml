@@ -31,7 +31,10 @@ spec:
             - name: OPENSEARCH_USERNAME
               value: admin
             - name: OPENSEARCH_PASSWORD
-              value: Password123!
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-%{name}-admin
+                  key: password
           livenessProbe:
             failureThreshold: 10
             httpGet:

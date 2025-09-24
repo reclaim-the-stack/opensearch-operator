@@ -83,22 +83,27 @@ spec:
               containerPort: 9300
             - name: "metrics"
               containerPort: 9600
-          env: [
+          env:
             # { name: OPENSEARCH_JAVA_OPTS, value: "-Xms512m -Xmx512m" },
-            { name: OPENSEARCH_INITIAL_ADMIN_PASSWORD, value: Password123! },
-          ]
+            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-%{name}-admin
+                  key: password
           volumeMounts:
             - name: "data"
               mountPath: "/usr/share/opensearch/data"
           readinessProbe:
-            failureThreshold: 6
-            httpGet:
-              path: /_cluster/health
-              port: 9200
-              scheme: HTTPS
-              httpHeaders:
-                - name: Authorization
-                  value: Basic YWRtaW46TXluZXdzZGVzazEyMyE= # admin:Password123!
+            failureThreshold: 3
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 5
+            exec:
+              command:
+                - bash
+                - -c
+                - curl --fail --silent --max-time 2 -o /dev/null --insecure -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" https://localhost:9200/_cluster/health
           resources: %{resources}
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Delete
