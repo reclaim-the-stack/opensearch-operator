@@ -12,3 +12,7 @@ group :development, :test do
   gem "rspec"
   gem "rubocop-mynewsdesk", git: "https://github.com/mynewsdesk/mnd-rubocop"
 end
+
+group :test do
+  gem "webmock"
+end
