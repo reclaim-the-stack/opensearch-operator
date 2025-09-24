@@ -141,7 +141,7 @@ class OpensearchOperator
 
     def ensure_dashboards_deployment
       dashboards_image = "opensearchproject/opensearch-dashboards:#{version}"
-      opensearch_hosts = "https://#{name}-service.#{namespace}.svc.cluster.local:9200"
+      opensearch_hosts = "https://opensearch-#{name}.#{namespace}.svc.cluster.local:9200"
 
       dashboards_deployment = Template["dashboards_deployment"].render(
         dashboards_image:,
