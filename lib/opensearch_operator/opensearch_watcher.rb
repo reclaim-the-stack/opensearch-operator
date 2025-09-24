@@ -1,5 +1,7 @@
 require "opensearch-ruby"
 
+OpenSSL::SSL::VERIFY_PEER = OpenSSL::SSL::VERIFY_NONE
+
 # Monitors the state of a single OpenSearch cluster via a URL (the OpenSearch REST API endpoint).
 #
 # Example usage:

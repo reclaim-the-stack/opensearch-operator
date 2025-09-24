@@ -219,7 +219,7 @@ class OpensearchOperator
     image = spec.fetch("image")
     version = image.include?(":") ? image.split(":").last : "latest"
     dashboards_image = "opensearchproject/opensearch-dashboards:#{version}"
-    opensearch_hosts = "http://opensearch-#{name}:9200"
+    opensearch_hosts = "https://opensearch-#{name}:9200"
     owner_references_json = owner_references(cluster).to_json
 
     deployment = Template["dashboards_deployment"].render(
