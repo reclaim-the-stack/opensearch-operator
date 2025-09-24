@@ -82,6 +82,8 @@ spec:
               containerPort: 9200
             - name: "transport"
               containerPort: 9300
+            - name: "metrics"
+              containerPort: 9600
           env: [
             # MVP runs single-node; remove this once you add real clustering logic
             #{ name: "discovery.type", value: "single-node" },

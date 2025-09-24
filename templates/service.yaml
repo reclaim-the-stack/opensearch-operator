@@ -18,6 +18,9 @@ spec:
     - name: "transport"
       port: 9300
       targetPort: 9300
+    - name: "metrics"
+      port: 9600
+      targetPort: 9600
   publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: opensearch
