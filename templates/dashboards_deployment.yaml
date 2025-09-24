@@ -28,8 +28,13 @@ spec:
           env:
             - name: OPENSEARCH_HOSTS
               value: "%{opensearch_hosts}"
-            - name: DISABLE_SECURITY_DASHBOARDS_PLUGIN
-              value: "true"
+            - name: OPENSEARCH_USERNAME
+              value: admin
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-%{name}-admin
+                  key: password
           livenessProbe:
             failureThreshold: 10
             httpGet:

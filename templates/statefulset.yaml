@@ -67,7 +67,6 @@ spec:
               echo "network.host: 0.0.0.0" > config/opensearch.yml
               echo "cluster.name: %{name}" >> config/opensearch.yml
               echo "node.name: $HOSTNAME" >> config/opensearch.yml
-              echo "plugins.security.disabled: true" >> config/opensearch.yml
               echo "discovery.seed_hosts: [$SEED_HOSTS]" >> config/opensearch.yml
               if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
                 echo "cluster.initial_cluster_manager_nodes: [$INITIAL_CLUSTER_MANAGER_NODES]" >> config/opensearch.yml
@@ -76,7 +75,7 @@ spec:
               echo "Starting OpenSearch with config:"
               cat config/opensearch.yml
 
-              exec opensearch
+              exec ./opensearch-docker-entrypoint.sh opensearch
           ports:
             - name: "http"
               containerPort: 9200
@@ -84,20 +83,27 @@ spec:
               containerPort: 9300
             - name: "metrics"
               containerPort: 9600
-          env: [
-            # MVP runs single-node; remove this once you add real clustering logic
-            #{ name: "discovery.type", value: "single-node" },
-            { name: "OPENSEARCH_JAVA_OPTS", value: "-Xms512m -Xmx512m" },
-            #{ name: "DISABLE_SECURITY_PLUGIN", value: "true" },
-          ]
+          env:
+            # { name: OPENSEARCH_JAVA_OPTS, value: "-Xms512m -Xmx512m" },
+            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-%{name}-admin
+                  key: password
           volumeMounts:
             - name: "data"
               mountPath: "/usr/share/opensearch/data"
           readinessProbe:
-            httpGet: { path: "/_cluster/health", port: 9200 }
-            initialDelaySeconds: 20
-            periodSeconds: 10
-            failureThreshold: 6
+            failureThreshold: 3
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 5
+            exec:
+              command:
+                - bash
+                - -c
+                - curl --fail --silent --max-time 2 -o /dev/null --insecure -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" https://localhost:9200/_cluster/health
           resources: %{resources}
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Delete
