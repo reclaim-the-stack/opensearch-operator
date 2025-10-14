@@ -1,3 +1,5 @@
+require "bcrypt"
+
 require "securerandom"
 require "time"
 
@@ -36,7 +38,9 @@ class OpensearchOperator
     end
 
     def reconsile
-      ensure_secret
+      ensure_credentials_secret
+      ensure_certificates_secret
+      ensure_security_config
       ensure_service
       ensure_statefulset
       ensure_dashboards_deployment
@@ -48,7 +52,7 @@ class OpensearchOperator
 
       # CLUSTER_HOST_OVERRIDE=localhost can be used for testing with port-forwarded clusters
       host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}.#{namespace}.svc.cluster.local"
-      cluster_url = "https://admin:#{password}@#{host}:9200"
+      cluster_url = "http://admin:#{admin_password}@#{host}:9200"
       @watcher = OpensearchWatcher.new(cluster_url).run do |new_state, changed_keys|
         update_status(new_state, changed_keys)
       end
@@ -77,33 +81,94 @@ class OpensearchOperator
 
     private
 
-    def password
-      return @password if @password
+    def admin_password
+      @admin_password ||= Base64.strict_decode64(secret.dig("data", "admin_password"))
+    end
 
-      secret_name = "opensearch-#{name}-admin"
+    def secret
+      return @secret if @secret
+
+      secret_name = "opensearch-#{name}-credentials"
       secret = Kubernetes.secrets.get(secret_name, namespace:)
       return if secret["code"] == 404
 
-      @password = Base64.strict_decode64(secret.dig("data", "password"))
+      @secret = secret
     end
 
-    # Password must be minimum 8 characters long and must contain at least one uppercase
-    # letter, one lowercase letter, one digit, and one non letter/digit character.
-    REQUIRED_PASSWORD_CHARACTERS = "Ul1_"
+    def ensure_credentials_secret
+      return if secret
 
-    def ensure_secret
-      return if password
+      admin_password = SecureRandom.hex
+      anomalyadmin_password = SecureRandom.hex
+      kibanaserver_password = SecureRandom.hex
+      logstash_password = SecureRandom.hex
+      readall_password = SecureRandom.hex
+      snapshotrestore_password = SecureRandom.hex
+      metrics_password = "metrics"
 
-      @password = "#{REQUIRED_PASSWORD_CHARACTERS}#{SecureRandom.hex}"
-
-      secret = Template["secret"].render(
+      secret = Template["credentials_secret"].render(
         name:,
         namespace:,
         owner_references:,
-        password:,
+        admin_password:,
+        anomalyadmin_password:,
+        kibanaserver_password:,
+        logstash_password:,
+        readall_password:,
+        snapshotrestore_password:,
+        metrics_password:,
       )
 
       Kubernetes.secrets.apply(secret)
+    end
+
+    def ensure_certificates_secret
+      return if Kubernetes.secrets.exists?("opensearch-#{name}-certificates", namespace:)
+
+      certificates = CertificateGenerator.generate
+
+      certificates_secret = Template["certificates_secret"].render(
+        name:,
+        namespace:,
+        owner_references:,
+        ca_crt: certificates.ca_crt.to_json,
+        ca_key: certificates.ca_key.to_json,
+        node_crt: certificates.node_crt.to_json,
+        node_key: certificates.node_key.to_json,
+        admin_crt: certificates.admin_crt.to_json,
+        admin_key: certificates.admin_key.to_json,
+      )
+
+      Kubernetes.secrets.apply(certificates_secret)
+    end
+
+    def ensure_security_config
+      admin_password = Base64.strict_decode64(secret.dig("data", "admin_password"))
+      anomalyadmin_password = Base64.strict_decode64(secret.dig("data", "anomalyadmin_password"))
+      kibanaserver_password = Base64.strict_decode64(secret.dig("data", "kibanaserver_password"))
+      logstash_password = Base64.strict_decode64(secret.dig("data", "logstash_password"))
+      readall_password = Base64.strict_decode64(secret.dig("data", "readall_password"))
+      snapshotrestore_password = Base64.strict_decode64(secret.dig("data", "snapshotrestore_password"))
+      metrics_password = Base64.strict_decode64(secret.dig("data", "metrics_password"))
+
+      internal_users_yaml = Template["_internal_users"].render(
+        admin_password_hash: BCrypt::Password.create(admin_password),
+        anomalyadmin_password_hash: BCrypt::Password.create(anomalyadmin_password),
+        kibanaserver_password_hash: BCrypt::Password.create(kibanaserver_password),
+        logstash_password_hash: BCrypt::Password.create(logstash_password),
+        readall_password_hash: BCrypt::Password.create(readall_password),
+        snapshotrestore_password_hash: BCrypt::Password.create(snapshotrestore_password),
+        metrics_password_hash: BCrypt::Password.create(metrics_password),
+      ).to_json
+
+      config_map = Template["security_configmap"].render(
+        name:,
+        namespace:,
+        owner_references:,
+        internal_users_yaml:,
+      )
+
+      Kubernetes.configmaps.apply(config_map)
     end
 
     def ensure_service
@@ -122,8 +187,12 @@ class OpensearchOperator
       resources = spec["resources"].to_json
       tolerations = spec["tolerations"].to_json
 
-      statefulset = Template["statefulset"].render(
+      startup_script = Template["_startup_script"].render(
+        name:,
         creation_timestamp_epoch:,
+      ).to_json
+
+      statefulset = Template["statefulset"].render(
         disk_size:,
         image:,
         name:,
@@ -134,6 +203,7 @@ class OpensearchOperator
         resources:,
         tolerations:,
         version:,
+        startup_script:,
       )
 
       Kubernetes.statefulsets.apply(statefulset)
@@ -141,7 +211,7 @@ class OpensearchOperator
 
     def ensure_dashboards_deployment
       dashboards_image = "opensearchproject/opensearch-dashboards:#{version}"
-      opensearch_hosts = "https://opensearch-#{name}.#{namespace}.svc.cluster.local:9200"
+      opensearch_hosts = "http://opensearch-#{name}.#{namespace}.svc.cluster.local:9200"
 
       dashboards_deployment = Template["dashboards_deployment"].render(
         dashboards_image:,

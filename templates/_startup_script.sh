@@ -1,0 +1,49 @@
+# Simplest possible way to guesstimate if we need to set cluster.initial_cluster_manager_nodes or not
+# If the cluster is being created now (within the last 5 minutes), we set it
+# If the cluster was created more than 5 minutes ago, we assume it's already formed
+CLUSTER_CREATED_TIMESTAMP=%{creation_timestamp_epoch}
+CURRENT_TIMESTAMP=$(date +%s)
+if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
+  echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
+  INITIAL_CLUSTER_MANAGER_NODES='"%{name}-0"'
+else
+  echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
+fi
+
+# Seed hosts via the headless service
+SEED_HOSTS='"opensearch-%{name}.default.svc.cluster.local"'
+
+# append to config/opensearch.yml
+echo "network.host: 0.0.0.0" > config/opensearch.yml
+echo "cluster.name: %{name}" >> config/opensearch.yml
+echo "node.name: $HOSTNAME" >> config/opensearch.yml
+echo "discovery.seed_hosts: [$SEED_HOSTS]" >> config/opensearch.yml
+if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
+  echo "cluster.initial_cluster_manager_nodes: [$INITIAL_CLUSTER_MANAGER_NODES]" >> config/opensearch.yml
+fi
+
+cat >> config/opensearch.yml <<'YAML'
+plugins.security.ssl.transport.pemcert_filepath: certs/node.crt
+plugins.security.ssl.transport.pemkey_filepath: certs/node.key
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/ca.crt
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.transport.resolve_hostname: false
+
+plugins.security.ssl.http.enabled: false
+
+plugins.security.authcz.admin_dn:
+  - CN=admin
+
+plugins.security.nodes_dn:
+  - CN=opensearch-node
+
+plugins.security.allow_default_init_securityindex: true
+YAML
+
+bin/opensearch-plugin install repository-s3 --silent --batch
+bin/opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/3.2.0.0/prometheus-exporter-3.2.0.0.zip
+
+echo "Starting OpenSearch with config:"
+cat config/opensearch.yml
+
+exec ./opensearch-docker-entrypoint.sh opensearch

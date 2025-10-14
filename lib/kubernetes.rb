@@ -67,6 +67,11 @@ module Kubernetes
       JSON.parse(response.body)
     end
 
+    def exists?(name, namespace:)
+      response = get(name, namespace:)
+      response["code"] != 404
+    end
+
     def create(params)
       namespace = params.dig("metadata", "namespace")
       raise Error, "namespace missing in metadata: #{params}" unless namespace

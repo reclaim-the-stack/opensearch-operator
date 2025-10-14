@@ -33,8 +33,8 @@ spec:
             - name: OPENSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: opensearch-%{name}-admin
-                  key: password
+                  name: opensearch-%{name}-credentials
+                  key: admin_password
           livenessProbe:
             failureThreshold: 10
             httpGet:
