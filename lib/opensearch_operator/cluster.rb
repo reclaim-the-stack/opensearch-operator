@@ -197,7 +197,7 @@ class OpensearchOperator
         prometheus_exporter_version:,
       ).to_json
 
-      memory = resources.dig("limits", "memory") || resources.dig("limits", "memory") || "1Gi"
+      memory = spec.dig("resources", "limits", "memory") || spec.dig("resources", "requests", "memory") || "1Gi"
       memory_in_bytes = Kubernetes.parse_memory(memory)
       heap_in_bytes = memory_in_bytes / 2
       heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
