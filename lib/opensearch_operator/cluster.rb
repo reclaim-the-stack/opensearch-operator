@@ -17,7 +17,7 @@ class OpensearchOperator
     def spec = @spec ||= @manifest.fetch("spec")
     def image = @image ||= spec.fetch("image")
     def replicas = @replicas ||= spec.fetch("replicas")
-    def disk_size = @storage_size ||= spec.fetch("diskSize")
+    def disk_size = @disk_size ||= spec.fetch("diskSize")
 
     def version = @version ||= image.split(":").last
 

@@ -326,7 +326,6 @@ module Kubernetes
     STANDARD_ERROR_AND_MAYBE_IRB_ABORT = [StandardError, defined?(IRB::Abort) && IRB::Abort].compact.freeze
 
     def request(method, path, params = {}, &)
-      attempt = 0
       connection_pool.with do |connection|
         LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
