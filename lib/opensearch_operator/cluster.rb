@@ -187,15 +187,20 @@ class OpensearchOperator
       resources = spec["resources"].to_json
       tolerations = spec["tolerations"].to_json
 
-      memory = resources.dig("limits", "memory") || resources.dig("limits", "memory") || "1Gi"
-      memory_in_bytes = Kubernetes.parse_memory(memory)
-      heap_in_bytes = memory_in_bytes / 2
-      heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
+      # Prometheus exporter plugin version must be synced with OpenSearch version:
+      # https://github.com/opensearch-project/opensearch-prometheus-exporter/blob/main/COMPATIBILITY.md
+      prometheus_exporter_version = "#{version}.0"
 
       startup_script = Template["_startup_script"].render(
         name:,
         creation_timestamp_epoch:,
+        prometheus_exporter_version:,
       ).to_json
+
+      memory = resources.dig("limits", "memory") || resources.dig("limits", "memory") || "1Gi"
+      memory_in_bytes = Kubernetes.parse_memory(memory)
+      heap_in_bytes = memory_in_bytes / 2
+      heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
 
       statefulset = Template["statefulset"].render(
         disk_size:,

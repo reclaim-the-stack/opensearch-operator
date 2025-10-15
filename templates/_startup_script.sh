@@ -41,7 +41,7 @@ plugins.security.allow_default_init_securityindex: true
 YAML
 
 bin/opensearch-plugin install repository-s3 --silent --batch
-bin/opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/3.2.0.0/prometheus-exporter-3.2.0.0.zip
+bin/opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/%{prometheus_exporter_version}/prometheus-exporter-%{prometheus_exporter_version}.zip
 
 echo "Starting OpenSearch with config:"
 cat config/opensearch.yml
