@@ -187,6 +187,11 @@ class OpensearchOperator
       resources = spec["resources"].to_json
       tolerations = spec["tolerations"].to_json
 
+      memory = resources.dig("limits", "memory") || resources.dig("limits", "memory") || "1Gi"
+      memory_in_bytes = Kubernetes.parse_memory(memory)
+      heap_in_bytes = memory_in_bytes / 2
+      heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
+
       startup_script = Template["_startup_script"].render(
         name:,
         creation_timestamp_epoch:,
@@ -198,6 +203,7 @@ class OpensearchOperator
         name:,
         namespace:,
         node_selector:,
+        heap_size:
         owner_references:,
         replicas:,
         resources:,

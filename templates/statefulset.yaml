@@ -56,7 +56,8 @@ spec:
             - name: "metrics"
               containerPort: 9600
           env:
-            # { name: OPENSEARCH_JAVA_OPTS, value: "-Xms512m -Xmx512m" },
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms%{heap_size} -Xmx%{heap_size}"
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
