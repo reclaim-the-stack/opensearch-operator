@@ -47,38 +47,7 @@ spec:
           command:
             - bash
             - -c
-            - |
-              # Simplest possible way to guesstimate if we need to set cluster.initial_cluster_manager_nodes or not
-              # If the cluster is being created now (within the last 5 minutes), we set it
-              # If the cluster was created more than 5 minutes ago, we assume it's already formed
-              CLUSTER_CREATED_TIMESTAMP=%{creation_timestamp_epoch}
-              CURRENT_TIMESTAMP=$(date +%s)
-              if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
-                echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
-                INITIAL_CLUSTER_MANAGER_NODES='"%{name}-0"'
-              else
-                echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
-              fi
-
-              # Seed hosts via the headless service
-              SEED_HOSTS='"opensearch-%{name}.default.svc.cluster.local"'
-
-              # append to config/opensearch.yml
-              echo "network.host: 0.0.0.0" > config/opensearch.yml
-              echo "cluster.name: %{name}" >> config/opensearch.yml
-              echo "node.name: $HOSTNAME" >> config/opensearch.yml
-              echo "discovery.seed_hosts: [$SEED_HOSTS]" >> config/opensearch.yml
-              if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
-                echo "cluster.initial_cluster_manager_nodes: [$INITIAL_CLUSTER_MANAGER_NODES]" >> config/opensearch.yml
-              fi
-
-              bin/opensearch-plugin install repository-s3 --silent --batch
-              bin/opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/3.2.0.0/prometheus-exporter-3.2.0.0.zip
-
-              echo "Starting OpenSearch with config:"
-              cat config/opensearch.yml
-
-              exec ./opensearch-docker-entrypoint.sh opensearch
+            - %{startup_script}
           ports:
             - name: "http"
               containerPort: 9200
@@ -91,11 +60,18 @@ spec:
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: opensearch-%{name}-admin
-                  key: password
+                  name: opensearch-%{name}-credentials
+                  key: admin_password
           volumeMounts:
-            - name: "data"
-              mountPath: "/usr/share/opensearch/data"
+            - name: data
+              mountPath: /usr/share/opensearch/data
+            - name: certificates
+              mountPath: /usr/share/opensearch/config/certs
+              readOnly: true
+            - name: internal-users
+              mountPath: /usr/share/opensearch/config/opensearch-security/internal_users.yml
+              subPath: internal_users.yml
+              readOnly: true
           readinessProbe:
             failureThreshold: 3
             initialDelaySeconds: 10
@@ -106,8 +82,15 @@ spec:
               command:
                 - bash
                 - -c
-                - curl --fail --silent --max-time 2 -o /dev/null --insecure -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" https://localhost:9200/_cluster/health
+                - curl --fail --silent --max-time 2 -o /dev/null -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" http://localhost:9200/_cluster/health
           resources: %{resources}
+      volumes:
+        - name: certificates
+          secret:
+            secretName: opensearch-%{name}-certificates
+        - name: internal-users
+          configMap:
+            name: opensearch-%{name}-security-config
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Delete
     whenScaled: Delete

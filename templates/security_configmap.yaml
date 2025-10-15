@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-%{name}-security-config
+  namespace: %{namespace}
+  labels:
+    opensearch.reclaim-the-stack.com/cluster: %{name}
+  ownerReferences: %{owner_references}
+data:
+  internal_users.yml: %{internal_users_yaml}
