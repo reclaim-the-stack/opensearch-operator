@@ -161,11 +161,14 @@ class OpensearchOperator
         metrics_password_hash: BCrypt::Password.create(metrics_password),
       ).to_json
 
+      roles_yaml = Template["_roles"].render.to_json
+
       config_map = Template["security_configmap"].render(
         name:,
         namespace:,
         owner_references:,
         internal_users_yaml:,
+        roles_yaml:,
       )
 
       Kubernetes.configmaps.apply(config_map)

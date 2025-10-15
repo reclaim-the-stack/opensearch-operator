@@ -55,5 +55,5 @@ metrics:
   hash: "%{metrics_password_hash}"
   reserved: true
   description: "Metrics user for Prometheus scraping"
-  backend_roles:
-  - "metrics"
+  opendistro_security_roles:
+  - "prometheus_monitor_with_indices"

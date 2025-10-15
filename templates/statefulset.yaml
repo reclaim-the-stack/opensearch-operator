@@ -69,9 +69,13 @@ spec:
             - name: certificates
               mountPath: /usr/share/opensearch/config/certs
               readOnly: true
-            - name: internal-users
+            - name: security-config
               mountPath: /usr/share/opensearch/config/opensearch-security/internal_users.yml
               subPath: internal_users.yml
+              readOnly: true
+            - name: security-config
+              mountPath: /usr/share/opensearch/config/opensearch-security/roles.yml
+              subPath: roles.yml
               readOnly: true
           readinessProbe:
             failureThreshold: 3
@@ -89,7 +93,7 @@ spec:
         - name: certificates
           secret:
             secretName: opensearch-%{name}-certificates
-        - name: internal-users
+        - name: security-config
           configMap:
             name: opensearch-%{name}-security-config
   persistentVolumeClaimRetentionPolicy:

@@ -18,7 +18,7 @@ class OpensearchOperator
       @substitution_variables = @template.scan(/%\{(\w+)\}/).flatten.uniq.freeze
     end
 
-    def render(variables)
+    def render(variables = {})
       missing_vars = @substitution_variables - variables.keys.map(&:to_s)
 
       unless missing_vars.empty?

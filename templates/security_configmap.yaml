@@ -8,3 +8,4 @@ metadata:
   ownerReferences: %{owner_references}
 data:
   internal_users.yml: %{internal_users_yaml}
+  roles.yml: %{roles_yaml}
