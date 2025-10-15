@@ -6,6 +6,8 @@ metadata:
   name: opensearch-%{name}
   namespace: %{namespace}
   labels:
+    app.kubernetes.io/managed-by: opensearch-operator
+    app.kubernetes.io/name: opensearch
     opensearch.reclaim-the-stack.com/cluster: %{name}
   ownerReferences: %{owner_references}
 spec:
