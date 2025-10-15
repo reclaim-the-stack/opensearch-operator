@@ -208,7 +208,7 @@ class OpensearchOperator
         name:,
         namespace:,
         node_selector:,
-        heap_size:
+        heap_size:,
         owner_references:,
         replicas:,
         resources:,
