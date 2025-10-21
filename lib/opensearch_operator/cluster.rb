@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require "bcrypt"
 
 require "securerandom"
@@ -53,13 +55,57 @@ class OpensearchOperator
       # CLUSTER_HOST_OVERRIDE=localhost can be used for testing with port-forwarded clusters
       host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}.#{namespace}.svc.cluster.local"
       cluster_url = "http://admin:#{admin_password}@#{host}:9200"
-      @watcher = OpensearchWatcher.new(cluster_url).run do |new_state, changed_keys|
+      @watcher = OpensearchWatcher.new(cluster_url)
+      @watcher.on_green do
+        add_snapshot_repositories
+      end
+      @watcher.run do |new_state, changed_keys|
         update_status(new_state, changed_keys)
       end
     end
 
     def finalize
       @watcher&.stop
+    end
+
+    # Adds snapshot repositories defined in the spec to the OpenSearch cluster via the REST API
+    def add_snapshot_repositories
+      repositories = spec["snapshotRepositories"] || []
+      return if repositories.empty?
+
+      repositories.each do |repository|
+        repository_name = repository["name"]
+
+        begin
+          existing = @watcher.client.snapshot.get_repository(repository: repository_name)
+          LOGGER.debug "Snapshot repository #{repository_name} already exists in cluster #{namespace}/#{name}, skipping"
+          next
+        rescue OpenSearch::Transport::Transport::Errors::NotFound
+          # Repository does not exist, proceed to create it
+        end
+
+        params = {
+          repository: repository_name,
+          body: {
+            type: "s3",
+            settings: {
+              base_path: repository["base_path"].presence,
+              bucket: repository["bucket"],
+              client: repository["name"],
+              # NOTE: hashed_prefix is default but this creates hashed prefixes at the root of the bucket
+              # which makes it unsuitable when sharing a snapshot bucket with other clusters.
+              shard_path_type: "hashed_infix",
+            },
+          },
+        }
+
+        puts params.inspect
+
+        @watcher.client.snapshot.create_repository(params)
+        LOGGER.info "Created snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
+      end
+    rescue StandardError => e
+      LOGGER.error "Failed to add snapshot repositories to cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
 
     # TODO: Maybe we should label which pod is master / manager?
@@ -194,12 +240,34 @@ class OpensearchOperator
       # https://github.com/opensearch-project/opensearch-prometheus-exporter/blob/main/COMPATIBILITY.md
       prometheus_exporter_version = "#{version}.0"
 
+      # local cache for repository secrets in the shape { name => secret }
+      repositorySecrets = {}
+
+      repositories = spec["snapshotRepositories"] || []
+      repositories.each do |repository|
+        repository["region"] ||= "us-east-1"
+        repository["endpoint"] ||= "s3.#{repository['region']}.amazonaws.com"
+        repository["protocol"] ||= "https"
+
+        access_key_secret_name, access_key_secret_key = repository.fetch("accessKeyId").values_at("name", "key")
+        secret = repositorySecrets[access_key_secret_name] ||= Kubernetes.secrets.get!(access_key_secret_name, namespace:)
+        access_key = Base64.strict_decode64(secret.fetch("data").fetch(access_key_secret_key))
+        repository["access_key"] = access_key
+
+        secret_key_secret_name, secret_key_secret_key = repository.fetch("secretAccessKey").values_at("name", "key")
+        secret = repositorySecrets[secret_key_secret_name] ||= Kubernetes.secrets.get!(secret_key_secret_name, namespace:)
+        secret_key = Base64.strict_decode64(secret.fetch("data").fetch(secret_key_secret_key))
+        repository["secret_key"] = secret_key
+      end
+
       startup_script = Template["_startup_script"].render(
         name:,
         creation_timestamp_epoch:,
         prometheus_exporter_version:,
+        repositories:,
       ).to_json
 
+      # Heap size is set to half of the memory limit or request
       memory = spec.dig("resources", "limits", "memory") || spec.dig("resources", "requests", "memory") || "1Gi"
       memory_in_bytes = Kubernetes.parse_memory(memory)
       heap_in_bytes = memory_in_bytes / 2

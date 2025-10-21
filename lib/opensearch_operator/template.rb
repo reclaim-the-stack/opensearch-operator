@@ -1,3 +1,7 @@
+require "mustache"
+
+Mustache.raise_on_context_miss = true
+
 class OpensearchOperator
   class Template
     def self.templates
@@ -30,7 +34,11 @@ class OpensearchOperator
         template.gsub!("%{#{key}}", value.to_s)
       end
 
-      if @path.end_with?(".yaml")
+      if @path.end_with?(".mustache")
+        template = Mustache.render(template, variables)
+      end
+
+      if @path.end_with?(".yaml") || @path.end_with?(".yaml.mustache")
         YAML.safe_load(template)
       else
         template

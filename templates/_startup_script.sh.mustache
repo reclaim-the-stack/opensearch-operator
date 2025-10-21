@@ -1,21 +1,21 @@
 # Simplest possible way to guesstimate if we need to set cluster.initial_cluster_manager_nodes or not
 # If the cluster is being created now (within the last 5 minutes), we set it
 # If the cluster was created more than 5 minutes ago, we assume it's already formed
-CLUSTER_CREATED_TIMESTAMP=%{creation_timestamp_epoch}
+CLUSTER_CREATED_TIMESTAMP={{creation_timestamp_epoch}}
 CURRENT_TIMESTAMP=$(date +%s)
 if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
   echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
-  INITIAL_CLUSTER_MANAGER_NODES='"%{name}-0"'
+  INITIAL_CLUSTER_MANAGER_NODES='"{{name}}-0"'
 else
   echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
 fi
 
 # Seed hosts via the headless service
-SEED_HOSTS='"opensearch-%{name}.default.svc.cluster.local"'
+SEED_HOSTS='"opensearch-{{name}}.default.svc.cluster.local"'
 
 # append to config/opensearch.yml
 echo "network.host: 0.0.0.0" > config/opensearch.yml
-echo "cluster.name: %{name}" >> config/opensearch.yml
+echo "cluster.name: {{name}}" >> config/opensearch.yml
 echo "node.name: $HOSTNAME" >> config/opensearch.yml
 echo "discovery.seed_hosts: [$SEED_HOSTS]" >> config/opensearch.yml
 if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
@@ -40,8 +40,18 @@ plugins.security.nodes_dn:
 plugins.security.allow_default_init_securityindex: true
 YAML
 
-bin/opensearch-plugin install repository-s3 --silent --batch
-bin/opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/%{prometheus_exporter_version}/prometheus-exporter-%{prometheus_exporter_version}.zip
+opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
+
+{{#repositories}}
+echo "Preparing client for s3 repository '{{name}}'"
+opensearch-plugin install repository-s3 --silent --batch
+
+echo "{{access_key}}" | opensearch-keystore add s3.client.{{name}}.access_key --stdin --force
+echo "{{secret_key}}" | opensearch-keystore add s3.client.{{name}}.secret_key --stdin --force
+echo "s3.client.{{name}}.endpoint: {{endpoint}}" >> config/opensearch.yml
+echo "s3.client.{{name}}.region: {{region}}" >> config/opensearch.yml
+echo "s3.client.{{name}}.protocol: {{protocol}}" >> config/opensearch.yml
+{{/repositories}}
 
 echo "Starting OpenSearch with config:"
 cat config/opensearch.yml

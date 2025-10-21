@@ -46,6 +46,14 @@ class OpensearchOperator
       self
     end
 
+    def on_green(&block)
+      if @state[:status] == "green"
+        block.call
+      else
+        @on_green_callback = block
+      end
+    end
+
     def stop
       @thread&.kill
       @thread = nil
@@ -69,6 +77,15 @@ class OpensearchOperator
         changed_keys = new_state.keys.reject { |key| @state[key] == new_state[key] }
 
         # LOGGER.debug "class=OpensearchWatcher action=refresh-state url=#{@url} changed_keys=#{changed_keys.join(",")}"
+
+        if @on_green_callback && status == "green"
+          begin
+            @on_green_callback.call
+            @on_green_callback = nil
+          rescue StandardError => e
+            LOGGER.error "class=OpensearchWatcher action=on-green-callback-error url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
+          end
+        end
 
         if changed_keys.any?
           @state = new_state

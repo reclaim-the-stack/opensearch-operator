@@ -87,6 +87,72 @@ spec:
                         type: string
                       effect:
                         type: string
+                snapshotRepositories:
+                  type: array
+                  description: List of snapshot repositories that should be created in the OpenSearch cluster.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - type
+                      - bucket
+                      - accessKeyId
+                      - secretAccessKey
+                    properties:
+                      name:
+                        type: string
+                        description: Repository identifier used inside OpenSearch.
+                      type:
+                        type: string
+                        description: Backend type for the repository.
+                        enum:
+                          - s3
+                        default: s3
+                      bucket:
+                        type: string
+                        description: S3 bucket that stores the snapshots.
+                      base_path:
+                        type: string
+                        description: Path prefix within the bucket.
+                      endpoint:
+                        type: string
+                        description: Optional custom S3-compatible endpoint.
+                      protocol:
+                        type: string
+                        description: Protocol used to connect to the endpoint.
+                        enum:
+                          - http
+                          - https
+                        default: https
+                      region:
+                        type: string
+                        description: AWS region for the bucket.
+                      accessKeyId:
+                        type: object
+                        description: Secret reference containing the AWS access key id.
+                        required:
+                          - name
+                          - key
+                        properties:
+                          name:
+                            type: string
+                            description: Name of the Kubernetes Secret holding the value.
+                          key:
+                            type: string
+                            description: Key in the Kubernetes Secret that stores the value.
+                      secretAccessKey:
+                        type: object
+                        description: Secret reference containing the AWS secret access key.
+                        required:
+                          - name
+                          - key
+                        properties:
+                          name:
+                            type: string
+                            description: Name of the Kubernetes Secret holding the value.
+                          key:
+                            type: string
+                            description: Key in the Kubernetes Secret that stores the value.
             status:
               type: object
               properties:
