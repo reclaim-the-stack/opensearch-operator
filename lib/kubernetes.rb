@@ -101,6 +101,7 @@ module Kubernetes
     def get!(name, namespace:)
       response = get(name, namespace:)
       raise Error, "Resource #{@plural}/#{name} in namespace #{namespace} not found" if response["code"] == 404
+
       response
     end
 

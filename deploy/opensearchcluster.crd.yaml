@@ -36,7 +36,7 @@ spec:
           properties:
             spec:
               type: object
-              required: [image, replicas, diskSize]
+              required: [image, replicas, diskSize, snapshotRepositories]
               properties:
                 image:
                   type: string
@@ -90,6 +90,7 @@ spec:
                 snapshotRepositories:
                   type: array
                   description: List of snapshot repositories that should be created in the OpenSearch cluster.
+                  default: []
                   items:
                     type: object
                     required:
@@ -98,6 +99,7 @@ spec:
                       - bucket
                       - accessKeyId
                       - secretAccessKey
+                      - policies
                     properties:
                       name:
                         type: string
@@ -153,6 +155,26 @@ spec:
                           key:
                             type: string
                             description: Key in the Kubernetes Secret that stores the value.
+                      policies:
+                        type: array
+                        description: Snapshot Management policies that should be created for this repository.
+                        default: []
+                        items:
+                          type: object
+                          required:
+                            - name
+                            - schedule
+                            - max_age
+                          properties:
+                            name:
+                              type: string
+                              description: Short identifier appended to the repository name when creating the policy.
+                            schedule:
+                              type: string
+                              description: Cron expression defining when snapshots should be taken (UTC timezone).
+                            max_age:
+                              type: string
+                              description: Retention period after which snapshots created by this policy are deleted (e.g., 30d).
             status:
               type: object
               properties:

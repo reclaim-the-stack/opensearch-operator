@@ -70,19 +70,8 @@ class OpensearchOperator
 
     # Adds snapshot repositories defined in the spec to the OpenSearch cluster via the REST API
     def add_snapshot_repositories
-      repositories = spec["snapshotRepositories"] || []
-      return if repositories.empty?
-
-      repositories.each do |repository|
+      spec.fetch("snapshotRepositories").each do |repository|
         repository_name = repository["name"]
-
-        begin
-          existing = @watcher.client.snapshot.get_repository(repository: repository_name)
-          LOGGER.debug "Snapshot repository #{repository_name} already exists in cluster #{namespace}/#{name}, skipping"
-          next
-        rescue OpenSearch::Transport::Transport::Errors::NotFound
-          # Repository does not exist, proceed to create it
-        end
 
         params = {
           repository: repository_name,
@@ -99,10 +88,38 @@ class OpensearchOperator
           },
         }
 
-        puts params.inspect
-
         @watcher.client.snapshot.create_repository(params)
         LOGGER.info "Created snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
+
+        repository.fetch("policies").each do |policy|
+          policy_name = "#{repository_name}-#{policy.fetch('name')}"
+          policy_params = {
+            creation: {
+              schedule: {
+                cron: {
+                  expression: policy.fetch("schedule"),
+                  timezone: "UTC",
+                },
+              },
+            },
+            deletion: {
+              condition: {
+                max_age: policy.fetch("max_age"),
+              },
+            },
+            snapshot_config: {
+              repository: repository_name,
+              include_global_state: false,
+              indices: "*,-.opendistro_security",
+            },
+          }
+
+          @watcher.client.http.post(
+            "/_plugins/_sm/policies/#{policy_name}",
+            body: policy_params.to_json,
+          )
+          LOGGER.info "Created snapshot lifecycle policy #{policy_name} in cluster #{namespace}/#{name}"
+        end
       end
     rescue StandardError => e
       LOGGER.error "Failed to add snapshot repositories to cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
@@ -241,7 +258,7 @@ class OpensearchOperator
       prometheus_exporter_version = "#{version}.0"
 
       # local cache for repository secrets in the shape { name => secret }
-      repositorySecrets = {}
+      repository_secrets = {}
 
       repositories = spec["snapshotRepositories"] || []
       repositories.each do |repository|
@@ -250,12 +267,12 @@ class OpensearchOperator
         repository["protocol"] ||= "https"
 
         access_key_secret_name, access_key_secret_key = repository.fetch("accessKeyId").values_at("name", "key")
-        secret = repositorySecrets[access_key_secret_name] ||= Kubernetes.secrets.get!(access_key_secret_name, namespace:)
+        secret = repository_secrets[access_key_secret_name] ||= Kubernetes.secrets.get!(access_key_secret_name, namespace:)
         access_key = Base64.strict_decode64(secret.fetch("data").fetch(access_key_secret_key))
         repository["access_key"] = access_key
 
         secret_key_secret_name, secret_key_secret_key = repository.fetch("secretAccessKey").values_at("name", "key")
-        secret = repositorySecrets[secret_key_secret_name] ||= Kubernetes.secrets.get!(secret_key_secret_name, namespace:)
+        secret = repository_secrets[secret_key_secret_name] ||= Kubernetes.secrets.get!(secret_key_secret_name, namespace:)
         secret_key = Base64.strict_decode64(secret.fetch("data").fetch(secret_key_secret_key))
         repository["secret_key"] = secret_key
       end

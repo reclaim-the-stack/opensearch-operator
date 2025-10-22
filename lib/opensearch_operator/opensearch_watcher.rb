@@ -83,7 +83,7 @@ class OpensearchOperator
             @on_green_callback.call
             @on_green_callback = nil
           rescue StandardError => e
-            LOGGER.error "class=OpensearchWatcher action=on-green-callback-error url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
+            LOGGER.error "class=OpensearchWatcher action=on-green-callback-error url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}" # rubocop:disable Layout/LineLength
           end
         end
 
