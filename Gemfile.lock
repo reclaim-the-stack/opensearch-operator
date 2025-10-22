@@ -154,7 +154,6 @@ DEPENDENCIES
   activesupport
   bcrypt
   concurrent-ruby-ext
-  connection_pool
   debug
   mustache
   opensearch-ruby

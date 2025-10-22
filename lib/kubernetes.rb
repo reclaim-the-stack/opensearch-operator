@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
-require "connection_pool"
 require "json"
 require "net/http"
 require "openssl"
 require "yaml"
 require "base64"
 require "uri"
+
+require_relative "non_reentrant_connection_pool"
 
 # A Kubernetes client built with minimal dependencies while keeping the API elegant.
 #
@@ -41,9 +42,11 @@ module Kubernetes
     Errno::ECONNRESET,
     Errno::EPIPE,
     Errno::ETIMEDOUT,
+    Errno::EBADF,
     Net::OpenTimeout,
     Net::ReadTimeout,
     Net::WriteTimeout,
+    Net::HTTPBadResponse,
   ].freeze
 
   # Returns the memory size in bytes
@@ -269,6 +272,10 @@ module Kubernetes
       http.active?
     end
 
+    def closed?
+      !http.active?
+    end
+
     def restart
       close
       http.start
@@ -281,7 +288,7 @@ module Kubernetes
 
   class << self
     def connection_pool
-      @connection_pool ||= ConnectionPool.new(size: 100, timeout: 5) { build_connection }
+      @connection_pool ||= NonReentrantConnectionPool.new { build_connection }
     end
 
     def get(path, params = {}, &)
@@ -334,11 +341,14 @@ module Kubernetes
 
     def request(method, path, params = {}, &)
       connection_pool.with do |connection|
+        unless connection.active?
+          LOGGER.debug "class=Kubernetes message=restarting-connection"
+          connection.restart
+        end
         LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
       rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT
-        connection&.close
-        connection_pool.discard_current_connection
+        connection_pool.discard(connection)
         raise
       end
     end

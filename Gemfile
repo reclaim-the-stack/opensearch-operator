@@ -5,7 +5,6 @@ source "https://rubygems.org"
 gem "activesupport"
 gem "bcrypt"
 gem "concurrent-ruby-ext"
-gem "connection_pool"
 gem "mustache"
 gem "opensearch-ruby"
 
