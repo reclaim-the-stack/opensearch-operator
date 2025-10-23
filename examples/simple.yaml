@@ -6,3 +6,8 @@ metadata:
 spec:
   replicas: 3
   diskSize: 5Gi
+  resources:
+    requests:
+      memory: 4Gi
+    limits:
+      memory: 4Gi

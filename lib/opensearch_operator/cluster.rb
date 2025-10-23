@@ -331,10 +331,11 @@ class OpensearchOperator
         repositories:,
       ).to_json
 
-      # Heap size is set to half of the memory limit or request
-      memory = spec.dig("resources", "limits", "memory") || spec.dig("resources", "requests", "memory") || "1Gi"
+      # Heap size is set to 50% of the memory limit, up to a maximum of 31Gi to avoid compressed oops being disabled
+      # NOTE: Our CRD makes resources.limits.memory mandatory and requires a minumum of 4Gi
+      memory = spec.fetch("resources").fetch("limits").fetch("memory")
       memory_in_bytes = Kubernetes.parse_memory(memory)
-      heap_in_bytes = memory_in_bytes / 2
+      heap_in_bytes = [memory_in_bytes / 2, 31.gigabytes].min
       heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
 
       statefulset = Template["statefulset"].render(

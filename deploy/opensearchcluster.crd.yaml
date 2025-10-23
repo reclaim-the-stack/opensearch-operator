@@ -36,7 +36,7 @@ spec:
           properties:
             spec:
               type: object
-              required: [image, replicas, diskSize, snapshotRepositories]
+              required: [image, replicas, diskSize, resources, snapshotRepositories]
               properties:
                 image:
                   type: string
@@ -52,24 +52,37 @@ spec:
                 resources:
                   description: |-
                     Regular Kubernetes resource requests and limits for OpenSearch nodes.
+                  type: object
+                  required:
+                    - limits
+                    - requests
                   properties:
                     limits:
-                      additionalProperties:
-                        anyOf:
-                        - type: integer
-                        - type: string
-                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                        x-kubernetes-int-or-string: true
                       type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      required:
+                        - memory
+                      properties:
+                        memory:
+                          type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      x-kubernetes-validations:
+                        - message: spec.resources.limits.memory must be at least 4Gi
+                          rule: quantity(self.memory).compareTo(quantity('4Gi')) >= 0
                     requests:
-                      additionalProperties:
-                        anyOf:
-                        - type: integer
-                        - type: string
-                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                        x-kubernetes-int-or-string: true
                       type: object
-                  type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      required:
+                        - memory
+                      properties:
+                        memory:
+                          type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      x-kubernetes-validations:
+                        - message: spec.resources.requests.memory must be at least 4Gi
+                          rule: quantity(self.memory).compareTo(quantity('4Gi')) >= 0
                 nodeSelector:
                   type: object
                   additionalProperties:

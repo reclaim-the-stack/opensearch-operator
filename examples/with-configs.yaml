@@ -12,3 +12,9 @@ spec:
     - key: role
       value: database
       effect: NoSchedule
+  resources:
+    requests:
+      cpu: 500m
+      memory: 4Gi
+    limits:
+      memory: 4Gi
