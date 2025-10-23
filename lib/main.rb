@@ -88,7 +88,6 @@ class OpensearchOperator
     else
       cluster = Cluster.new(cluster_manifest)
       cluster.reconsile
-      cluster.watch
       @clusters[cluster.uid] = cluster
     end
   end

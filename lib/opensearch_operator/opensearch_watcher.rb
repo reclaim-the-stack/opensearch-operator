@@ -79,12 +79,8 @@ class OpensearchOperator
         # LOGGER.debug "class=OpensearchWatcher action=refresh-state url=#{@url} changed_keys=#{changed_keys.join(",")}"
 
         if @on_green_callback && status == "green"
-          begin
-            @on_green_callback.call
-            @on_green_callback = nil
-          rescue StandardError => e
-            LOGGER.error "class=OpensearchWatcher action=on-green-callback-error url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}" # rubocop:disable Layout/LineLength
-          end
+          @on_green_callback.call
+          @on_green_callback = nil
         end
 
         if changed_keys.any?

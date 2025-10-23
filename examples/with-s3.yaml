@@ -36,3 +36,6 @@ spec:
         - name: daily
           schedule: 0 0 * * * # every day at midnight
           max_age: 30d
+        # - name: hourly
+        #   schedule: 0 * * * * # every hour
+        #   max_age: 1d

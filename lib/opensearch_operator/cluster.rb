@@ -13,15 +13,15 @@ class OpensearchOperator
       @manifest = manifest
     end
 
-    def name = @name ||= @manifest.fetch("metadata").fetch("name")
-    def namespace = @namespace ||= @manifest.fetch("metadata").fetch("namespace")
-    def uid = @uid ||= @manifest.fetch("metadata").fetch("uid")
-    def spec = @spec ||= @manifest.fetch("spec")
-    def image = @image ||= spec.fetch("image")
-    def replicas = @replicas ||= spec.fetch("replicas")
-    def disk_size = @disk_size ||= spec.fetch("diskSize")
+    def name = @manifest.fetch("metadata").fetch("name")
+    def namespace = @manifest.fetch("metadata").fetch("namespace")
+    def uid = @manifest.fetch("metadata").fetch("uid")
+    def spec = @manifest.fetch("spec")
+    def image = spec.fetch("image")
+    def replicas = spec.fetch("replicas")
+    def disk_size = spec.fetch("diskSize")
 
-    def version = @version ||= image.split(":").last
+    def version = image.split(":").last
 
     delegate :equal?, to: :@manifest
     delegate :dig, to: :@manifest
@@ -47,20 +47,22 @@ class OpensearchOperator
       ensure_statefulset
       ensure_dashboards_deployment
       ensure_dashboards_service
+
+      initialize_or_trigger_watcher
     end
 
-    def watch
-      return @watcher if @watcher
-
-      # CLUSTER_HOST_OVERRIDE=localhost can be used for testing with port-forwarded clusters
-      host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}.#{namespace}.svc.cluster.local"
-      cluster_url = "http://admin:#{admin_password}@#{host}:9200"
-      @watcher = OpensearchWatcher.new(cluster_url)
-      @watcher.on_green do
-        add_snapshot_repositories
-      end
-      @watcher.run do |new_state, changed_keys|
-        update_status(new_state, changed_keys)
+    def initialize_or_trigger_watcher
+      if @watcher
+        @watcher.on_green { upsert_snapshot_repositories }
+      else
+        # CLUSTER_HOST_OVERRIDE=localhost can be used for testing with port-forwarded clusters
+        host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}.#{namespace}.svc.cluster.local"
+        cluster_url = "http://admin:#{admin_password}@#{host}:9200"
+        @watcher = OpensearchWatcher.new(cluster_url)
+        @watcher.on_green { upsert_snapshot_repositories }
+        @watcher.run do |new_state, changed_keys|
+          update_status(new_state, changed_keys)
+        end
       end
     end
 
@@ -68,10 +70,12 @@ class OpensearchOperator
       @watcher&.stop
     end
 
-    # Adds snapshot repositories defined in the spec to the OpenSearch cluster via the REST API
-    def add_snapshot_repositories
+    # Configures snapshot repositories and reconciles associated lifecycle policies in OpenSearch.
+    def upsert_snapshot_repositories
+      existing_policies = @watcher.client.http.get("/_plugins/_sm/policies").fetch("policies")
+
       spec.fetch("snapshotRepositories").each do |repository|
-        repository_name = repository["name"]
+        repository_name = repository.fetch("name")
 
         params = {
           repository: repository_name,
@@ -79,8 +83,8 @@ class OpensearchOperator
             type: "s3",
             settings: {
               base_path: repository["base_path"].presence,
-              bucket: repository["bucket"],
-              client: repository["name"],
+              bucket: repository.fetch("bucket"),
+              client: repository_name,
               # NOTE: hashed_prefix is default but this creates hashed prefixes at the root of the bucket
               # which makes it unsuitable when sharing a snapshot bucket with other clusters.
               shard_path_type: "hashed_infix",
@@ -88,41 +92,18 @@ class OpensearchOperator
           },
         }
 
-        @watcher.client.snapshot.create_repository(params)
-        LOGGER.info "Created snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
-
-        repository.fetch("policies").each do |policy|
-          policy_name = "#{repository_name}-#{policy.fetch('name')}"
-          policy_params = {
-            creation: {
-              schedule: {
-                cron: {
-                  expression: policy.fetch("schedule"),
-                  timezone: "UTC",
-                },
-              },
-            },
-            deletion: {
-              condition: {
-                max_age: policy.fetch("max_age"),
-              },
-            },
-            snapshot_config: {
-              repository: repository_name,
-              include_global_state: false,
-              indices: "*,-.opendistro_security",
-            },
-          }
-
-          @watcher.client.http.post(
-            "/_plugins/_sm/policies/#{policy_name}",
-            body: policy_params.to_json,
-          )
-          LOGGER.info "Created snapshot lifecycle policy #{policy_name} in cluster #{namespace}/#{name}"
+        begin
+          @watcher.client.snapshot.create_repository(params)
+        rescue StandardError => e
+          LOGGER.error "Failed to upsert snapshot repository for cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
+          next
         end
+
+        LOGGER.info "Ensured snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
+
+
+        reconcile_snapshot_policies(repository_name, repository.fetch("policies"), existing_policies)
       end
-    rescue StandardError => e
-      LOGGER.error "Failed to add snapshot repositories to cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
 
     # TODO: Maybe we should label which pod is master / manager?
@@ -146,6 +127,72 @@ class OpensearchOperator
 
     def admin_password
       @admin_password ||= Base64.strict_decode64(secret.dig("data", "admin_password"))
+    end
+
+    def reconcile_snapshot_policies(repository_name, policies, existing_policies)
+      policies.each do |policy|
+        LOGGER.debug "Reconciling snapshot policy #{policy.fetch('name')} for repository #{repository_name} in cluster #{namespace}/#{name}"
+        LOGGER.debug "Policy details: #{policy}"
+        policy_name = "#{repository_name}-#{policy.fetch('name')}"
+        payload = {
+          creation: {
+            schedule: {
+              cron: {
+                expression: policy.fetch("schedule"),
+                timezone: "UTC",
+              },
+            },
+          },
+          deletion: {
+            condition: {
+              max_age: policy.fetch("max_age"),
+            },
+          },
+          snapshot_config: {
+            repository: repository_name,
+            include_global_state: false,
+            indices: "*,-.opendistro_security",
+          },
+        }
+
+        existing_policy_document = existing_policies.find do |policy_document|
+          policy = policy_document.fetch("sm_policy")
+          policy.fetch("snapshot_config").fetch("repository") == repository_name && policy.fetch("name") == policy_name
+        end
+
+        if existing_policy_document
+          # NOTE: This approach to detecting changes was too naive as OpenSearch adds and changes fields. eg.
+          # if the user pushes max_age: 24h it gets returned as max_age: 1d. Hence we've resorted to always
+          # updating the policies for now even if they haven't actually changed.
+          # next if existing_policy_document.fetch("sm_policy").slice(*payload.keys) == payload
+
+          @watcher.client.http.put(
+            "/_plugins/_sm/policies/#{policy_name}",
+            params: {
+              if_seq_no: existing_policy_document.fetch("_seq_no"),
+              if_primary_term: existing_policy_document.fetch("_primary_term"),
+            },
+            body: payload,
+          )
+          LOGGER.info "Updated snapshot lifecycle policy #{policy_name} in cluster #{namespace}/#{name}"
+        else
+          @watcher.client.http.post("/_plugins/_sm/policies/#{policy_name}", body: payload)
+          LOGGER.info "Created snapshot lifecycle policy #{policy_name} in cluster #{namespace}/#{name}"
+        end
+      end
+
+      # Delete policies that are not in the spec anymore
+      expired_policies = existing_policies.select do |existing_policy_document|
+        existing_policy = existing_policy_document.fetch("sm_policy")
+        existing_policy.fetch("snapshot_config").fetch("repository") == repository_name &&
+          policies.none? { |p| "#{repository_name}-#{p.fetch('name')}" == existing_policy.fetch("name") }
+      end
+      expired_policies.each do |expired_policy_document|
+        policy_name = expired_policy_document.fetch("sm_policy").fetch("name")
+
+        @watcher.client.http.delete("/_plugins/_sm/policies/#{policy_name}")
+        LOGGER.info "Deleted snapshot lifecycle policy #{policy_name} in cluster #{namespace}/#{name}"
+      end
     end
 
     def secret
