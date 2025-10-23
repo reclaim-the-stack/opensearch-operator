@@ -1,0 +1,38 @@
+apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+kind: OpenSearch
+metadata:
+  name: with-s3
+  namespace: default
+spec:
+  replicas: 3
+  diskSize: 5Gi
+  nodeSelector:
+    node-role.kubernetes.io/database: ""
+  tolerations:
+    - key: role
+      value: database
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 2Gi
+  snapshotRepositories:
+    - name: hetzner-object-storage
+      type: s3
+      bucket: devops-kubernetes-staging-backups
+      base_path: opensearch-backups/with-s3
+      endpoint: hel1.your-objectstorage.com
+      protocol: https
+      region: hel1
+      accessKeyId:
+        name: hetzner-kubernetes-staging-s3-credentials
+        key: s3.client.default.access_key
+      secretAccessKey:
+        name: hetzner-kubernetes-staging-s3-credentials
+        key: s3.client.default.secret_key
+      policies:
+        - name: daily
+          schedule: 0 0 * * * # every day at midnight
+          max_age: 30d
