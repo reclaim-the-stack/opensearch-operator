@@ -184,6 +184,13 @@ module Kubernetes
 
               event = JSON.parse(line)
 
+              if event["type"] == "ERROR" && event.dig("object", "code") == 410
+                message = event.dig("object", "message")
+                # TODO: more graceful handling of expired watches, this approach is good enough for now
+                # since we don't have any important logic around DELETE events which can go missing here.
+                abort "ERROR: Watch expired: #{message}, aborting process to allow pod restart"
+              end
+
               # Don't bother the caller with bookmark events, we only use them for resourceVersion updates
               yield event unless event["type"] == "BOOKMARK"
 
