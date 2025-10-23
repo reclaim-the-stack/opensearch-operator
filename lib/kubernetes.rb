@@ -143,7 +143,7 @@ module Kubernetes
 
       params["metadata"].delete("managedFields")
 
-      query_string = "fieldManager=#{Kubernetes.field_manager}&fieldValidation=Strict"
+      query_string = "fieldManager=#{Kubernetes.field_manager}&fieldValidation=Strict&force=true"
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}?#{query_string}"
 
       response = Kubernetes.apply_patch(path, params)
