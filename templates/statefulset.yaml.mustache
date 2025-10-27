@@ -58,6 +58,8 @@ spec:
           env:
             - name: OPENSEARCH_JAVA_OPTS
               value: "-Xms%{heap_size} -Xmx%{heap_size}"
+            # - name: AWS_EC2_METADATA_DISABLED
+            #   value: "true"
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -77,6 +79,11 @@ spec:
               mountPath: /usr/share/opensearch/config/opensearch-security/roles.yml
               subPath: roles.yml
               readOnly: true
+{{#has_repository_secret_sources}}
+            - name: repository-credentials
+              mountPath: {{repository_credentials_mount_path}}
+              readOnly: true
+{{/has_repository_secret_sources}}
           readinessProbe:
             failureThreshold: 3
             initialDelaySeconds: 10
@@ -96,6 +103,20 @@ spec:
         - name: security-config
           configMap:
             name: opensearch-%{name}-security-config
+{{#has_repository_secret_sources}}
+        - name: repository-credentials
+          projected:
+            sources:
+{{#repository_secret_sources}}
+              - secret:
+                  name: {{secret_name}}
+                  items:
+{{#items}}
+                    - key: {{key}}
+                      path: {{path}}
+{{/items}}
+{{/repository_secret_sources}}
+{{/has_repository_secret_sources}}
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Delete
     whenScaled: Delete

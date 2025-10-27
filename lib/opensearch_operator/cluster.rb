@@ -304,7 +304,6 @@ class OpensearchOperator
       # https://github.com/opensearch-project/opensearch-prometheus-exporter/blob/main/COMPATIBILITY.md
       prometheus_exporter_version = "#{version}.0"
 
-      # local cache for repository secrets in the shape { name => secret }
       repositories = spec["snapshotRepositories"] || []
       repositories.each do |repository|
         repository["region"] ||= "us-east-1"
@@ -313,7 +312,7 @@ class OpensearchOperator
       end
 
       repository_credentials_mount_path = "/var/run/opensearch/repositories"
-      repository_secret_sources = {}
+      repository_secret_sources_by_name = {}
       repositories_for_template = repositories.map do |repository|
         repository_template = repository.dup
         repository_name = repository.fetch("name")
@@ -328,13 +327,11 @@ class OpensearchOperator
         secret_access_key_ref = repository.fetch("secretAccessKey")
 
         access_key_secret_name = access_key_ref.fetch("name")
-        repository_secret_sources[access_key_secret_name] ||= {
-          "secret" => {
-            "name" => access_key_secret_name,
-            "items" => [],
-          },
+        repository_secret_sources_by_name[access_key_secret_name] ||= {
+          "secret_name" => access_key_secret_name,
+          "items" => [],
         }
-        access_key_items = repository_secret_sources[access_key_secret_name]["secret"]["items"]
+        access_key_items = repository_secret_sources_by_name[access_key_secret_name]["items"]
         unless access_key_items.any? { |item| item["path"] == access_key_relative_path }
           access_key_items << {
             "key" => access_key_ref.fetch("key"),
@@ -343,13 +340,11 @@ class OpensearchOperator
         end
 
         secret_access_key_secret_name = secret_access_key_ref.fetch("name")
-        repository_secret_sources[secret_access_key_secret_name] ||= {
-          "secret" => {
-            "name" => secret_access_key_secret_name,
-            "items" => [],
-          },
+        repository_secret_sources_by_name[secret_access_key_secret_name] ||= {
+          "secret_name" => secret_access_key_secret_name,
+          "items" => [],
         }
-        secret_key_items = repository_secret_sources[secret_access_key_secret_name]["secret"]["items"]
+        secret_key_items = repository_secret_sources_by_name[secret_access_key_secret_name]["items"]
         unless secret_key_items.any? { |item| item["path"] == secret_key_relative_path }
           secret_key_items << {
             "key" => secret_access_key_ref.fetch("key"),
@@ -359,6 +354,8 @@ class OpensearchOperator
 
         repository_template
       end
+
+      repository_secret_sources = repository_secret_sources_by_name.values
 
       startup_script = Template["_startup_script"].render(
         name:,
@@ -388,24 +385,10 @@ class OpensearchOperator
         tolerations:,
         version:,
         startup_script:,
+        has_repository_secret_sources: repository_secret_sources.any?,
+        repository_credentials_mount_path: repository_credentials_mount_path,
+        repository_secret_sources:,
       )
-
-      if repository_secret_sources.any?
-        container_spec = statefulset.fetch("spec").fetch("template").fetch("spec").fetch("containers").first
-        container_spec.fetch("volumeMounts") << {
-          "name" => "repository-credentials",
-          "mountPath" => repository_credentials_mount_path,
-          "readOnly" => true,
-        }
-
-        volumes = statefulset.fetch("spec").fetch("template").fetch("spec").fetch("volumes")
-        volumes << {
-          "name" => "repository-credentials",
-          "projected" => {
-            "sources" => repository_secret_sources.values,
-          },
-        }
-      end
 
       Kubernetes.statefulsets.apply(statefulset)
     end
