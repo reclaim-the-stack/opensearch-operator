@@ -313,20 +313,14 @@ class OpensearchOperator
         repository["endpoint"] ||= "s3.#{repository['region']}.amazonaws.com"
         repository["protocol"] ||= "https"
 
-        access_key_secret_name, access_key_secret_key = repository.fetch("accessKeyId").values_at("name", "key")
-        secret = repository_secrets[access_key_secret_name] ||= Kubernetes.secrets.get!(access_key_secret_name, namespace:)
-        access_key = Base64.strict_decode64(secret.fetch("data").fetch(access_key_secret_key))
-        repository["access_key"] = access_key
-
-        secret_key_secret_name, secret_key_secret_key = repository.fetch("secretAccessKey").values_at("name", "key")
-        secret = repository_secrets[secret_key_secret_name] ||= Kubernetes.secrets.get!(secret_key_secret_name, namespace:)
-        secret_key = Base64.strict_decode64(secret.fetch("data").fetch(secret_key_secret_key))
-        repository["secret_key"] = secret_key
+        repository["access_key_secret"] = repository.fetch("accessKeyId")
+        repository["secret_key_secret"] = repository.fetch("secretAccessKey")
       end
 
       startup_script = Template["_startup_script"].render(
-        name:,
         creation_timestamp_epoch:,
+        has_repositories: repositories.any?,
+        name:,
         prometheus_exporter_version:,
         repositories:,
       ).to_json
@@ -340,17 +334,20 @@ class OpensearchOperator
 
       statefulset = Template["statefulset"].render(
         disk_size:,
+        has_repositories: repositories.any?,
+        heap_size:,
         image:,
         name:,
         namespace:,
         node_selector:,
-        heap_size:,
         owner_references:,
         replicas:,
+        repositories:,
+        repository_secrets_path: "/tmp/repository_secrets",
         resources:,
+        startup_script:,
         tolerations:,
         version:,
-        startup_script:,
       )
 
       Kubernetes.statefulsets.apply(statefulset)
