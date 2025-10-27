@@ -305,30 +305,67 @@ class OpensearchOperator
       prometheus_exporter_version = "#{version}.0"
 
       # local cache for repository secrets in the shape { name => secret }
-      repository_secrets = {}
-
       repositories = spec["snapshotRepositories"] || []
       repositories.each do |repository|
         repository["region"] ||= "us-east-1"
         repository["endpoint"] ||= "s3.#{repository['region']}.amazonaws.com"
         repository["protocol"] ||= "https"
+      end
 
-        access_key_secret_name, access_key_secret_key = repository.fetch("accessKeyId").values_at("name", "key")
-        secret = repository_secrets[access_key_secret_name] ||= Kubernetes.secrets.get!(access_key_secret_name, namespace:)
-        access_key = Base64.strict_decode64(secret.fetch("data").fetch(access_key_secret_key))
-        repository["access_key"] = access_key
+      repository_credentials_mount_path = "/var/run/opensearch/repositories"
+      repository_secret_sources = {}
+      repositories_for_template = repositories.map do |repository|
+        repository_template = repository.dup
+        repository_name = repository.fetch("name")
 
-        secret_key_secret_name, secret_key_secret_key = repository.fetch("secretAccessKey").values_at("name", "key")
-        secret = repository_secrets[secret_key_secret_name] ||= Kubernetes.secrets.get!(secret_key_secret_name, namespace:)
-        secret_key = Base64.strict_decode64(secret.fetch("data").fetch(secret_key_secret_key))
-        repository["secret_key"] = secret_key
+        access_key_relative_path = "repositories/#{repository_name}/access_key"
+        secret_key_relative_path = "repositories/#{repository_name}/secret_key"
+
+        repository_template["access_key_path"] = "#{repository_credentials_mount_path}/#{repository_name}/access_key"
+        repository_template["secret_key_path"] = "#{repository_credentials_mount_path}/#{repository_name}/secret_key"
+
+        access_key_ref = repository.fetch("accessKeyId")
+        secret_access_key_ref = repository.fetch("secretAccessKey")
+
+        access_key_secret_name = access_key_ref.fetch("name")
+        repository_secret_sources[access_key_secret_name] ||= {
+          "secret" => {
+            "name" => access_key_secret_name,
+            "items" => [],
+          },
+        }
+        access_key_items = repository_secret_sources[access_key_secret_name]["secret"]["items"]
+        unless access_key_items.any? { |item| item["path"] == access_key_relative_path }
+          access_key_items << {
+            "key" => access_key_ref.fetch("key"),
+            "path" => access_key_relative_path,
+          }
+        end
+
+        secret_access_key_secret_name = secret_access_key_ref.fetch("name")
+        repository_secret_sources[secret_access_key_secret_name] ||= {
+          "secret" => {
+            "name" => secret_access_key_secret_name,
+            "items" => [],
+          },
+        }
+        secret_key_items = repository_secret_sources[secret_access_key_secret_name]["secret"]["items"]
+        unless secret_key_items.any? { |item| item["path"] == secret_key_relative_path }
+          secret_key_items << {
+            "key" => secret_access_key_ref.fetch("key"),
+            "path" => secret_key_relative_path,
+          }
+        end
+
+        repository_template
       end
 
       startup_script = Template["_startup_script"].render(
         name:,
         creation_timestamp_epoch:,
         prometheus_exporter_version:,
-        repositories:,
+        repositories: repositories_for_template,
+        has_repositories: repositories_for_template.any?,
       ).to_json
 
       # Heap size is set to 50% of the memory limit, up to a maximum of 31Gi to avoid compressed oops being disabled
@@ -352,6 +389,23 @@ class OpensearchOperator
         version:,
         startup_script:,
       )
+
+      if repository_secret_sources.any?
+        container_spec = statefulset.fetch("spec").fetch("template").fetch("spec").fetch("containers").first
+        container_spec.fetch("volumeMounts") << {
+          "name" => "repository-credentials",
+          "mountPath" => repository_credentials_mount_path,
+          "readOnly" => true,
+        }
+
+        volumes = statefulset.fetch("spec").fetch("template").fetch("spec").fetch("volumes")
+        volumes << {
+          "name" => "repository-credentials",
+          "projected" => {
+            "sources" => repository_secret_sources.values,
+          },
+        }
+      end
 
       Kubernetes.statefulsets.apply(statefulset)
     end
