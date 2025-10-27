@@ -81,11 +81,11 @@ spec:
           env:
             - name: OPENSEARCH_JAVA_OPTS
               value: -Xms{{{heap_size}}} -Xmx{{{heap_size}}}
-            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+            - name: METRICS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: opensearch-{{{name}}}-credentials
-                  key: admin_password
+                  key: metrics_password
           volumeMounts:
             - name: opensearch-keystore
               mountPath: /tmp/keystore
@@ -117,7 +117,7 @@ spec:
               command:
                 - bash
                 - -c
-                - curl --fail --silent --max-time 2 -o /dev/null -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" http://localhost:9200/_cluster/health
+                - curl --fail --silent --max-time 2 -o /dev/null -u "metrics:$METRICS_PASSWORD" http://localhost:9200/_cluster/health
           resources: {{{resources}}}
       volumes:
         - name: opensearch-keystore # to share keystore between init containers and main container
