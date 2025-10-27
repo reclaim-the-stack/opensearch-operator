@@ -29,12 +29,12 @@ spec:
             - name: OPENSEARCH_HOSTS
               value: "%{opensearch_hosts}"
             - name: OPENSEARCH_USERNAME
-              value: admin
+              value: kibanaserver
             - name: OPENSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: opensearch-%{name}-credentials
-                  key: admin_password
+                  key: kibanaserver_password
           livenessProbe:
             failureThreshold: 10
             httpGet:
