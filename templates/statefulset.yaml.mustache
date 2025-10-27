@@ -1,0 +1,154 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{{name}}}
+  namespace: {{{namespace}}}
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: opensearch-{{{name}}}
+    app.kubernetes.io/version: {{{version}}}
+    app.kubernetes.io/part-of: {{{name}}}
+    app.kubernetes.io/managed-by: opensearch-operator
+    opensearch.reclaim-the-stack.com/cluster: {{{name}}}
+  ownerReferences: {{{owner_references}}}
+spec:
+  serviceName: opensearch-{{{name}}}
+  # To reach quorum during bootstrapping we can't wait for each pod to be ready before starting the next
+  podManagementPolicy: Parallel
+  replicas: {{{replicas}}}
+  selector:
+    matchLabels:
+      opensearch.reclaim-the-stack.com/cluster: {{{name}}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/instance: opensearch-{{{name}}}
+        app.kubernetes.io/version: {{{version}}}
+        app.kubernetes.io/part-of: {{{name}}}
+        app.kubernetes.io/managed-by: opensearch-operator
+        opensearch.reclaim-the-stack.com/cluster: {{{name}}}
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: opensearch.reclaim-the-stack.com/cluster
+                    operator: In
+                    values:
+                      - {{{name}}}
+              topologyKey: kubernetes.io/hostname
+      nodeSelector: {{{node_selector}}}
+      tolerations: {{{tolerations}}}
+      {{#has_repositories}}
+      initContainers:
+        - name: repository-secrets
+          image: {{{image}}}
+          command:
+            - bash
+            - -e
+            - -c
+            - |
+              {{#repositories}}
+              cat "{{repository_secrets_path}}/{{name}}/access_key" | opensearch-keystore add s3.client.{{name}}.access_key --stdin --force
+              cat "{{repository_secrets_path}}/{{name}}/secret_key" | opensearch-keystore add s3.client.{{name}}.secret_key --stdin --force
+              {{/repositories}}
+
+              cp config/opensearch.keystore /tmp/keystore/opensearch.keystore
+          volumeMounts:
+            - name: repository-secrets
+              mountPath: {{{repository_secrets_path}}}
+              readOnly: true
+            - name: opensearch-keystore
+              mountPath: /tmp/keystore
+      {{/has_repositories}}
+      containers:
+        - name: opensearch
+          image: {{{image}}}
+          command:
+            - bash
+            - -e
+            - -c
+            - {{{startup_script}}}
+          ports:
+            - name: http
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+            - name: metrics
+              containerPort: 9600
+          env:
+            - name: OPENSEARCH_JAVA_OPTS
+              value: -Xms{{{heap_size}}} -Xmx{{{heap_size}}}
+            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-{{{name}}}-credentials
+                  key: admin_password
+          volumeMounts:
+            - name: opensearch-keystore
+              mountPath: /tmp/keystore
+            - name: data
+              mountPath: /usr/share/opensearch/data
+            - name: certificates
+              mountPath: /usr/share/opensearch/config/certs
+              readOnly: true
+            - name: security-config
+              mountPath: /usr/share/opensearch/config/opensearch-security/internal_users.yml
+              subPath: internal_users.yml
+              readOnly: true
+            - name: security-config
+              mountPath: /usr/share/opensearch/config/opensearch-security/roles.yml
+              subPath: roles.yml
+              readOnly: true
+            {{#has_repositories}}
+            - name: repository-secrets
+              mountPath: {{{repository_secrets_path}}}
+              readOnly: true
+            {{/has_repositories}}
+          readinessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 5
+            exec:
+              command:
+                - bash
+                - -c
+                - curl --fail --silent --max-time 2 -o /dev/null -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" http://localhost:9200/_cluster/health
+          resources: {{{resources}}}
+      volumes:
+        - name: opensearch-keystore # to share keystore between init containers and main container
+          emptyDir: {}
+        - name: certificates
+          secret:
+            secretName: opensearch-{{{name}}}-certificates
+        - name: security-config
+          configMap:
+            name: opensearch-{{{name}}}-security-config
+        - name: repository-secrets
+          projected:
+            sources:
+              {{#repositories}}
+              - secret:
+                  name: {{access_key_secret.name}}
+                  items:
+                    - key: {{access_key_secret.key}}
+                      path: {{{name}}}/access_key
+              - secret:
+                  name: {{secret_key_secret.name}}
+                  items:
+                    - key: {{secret_key_secret.key}}
+                      path: {{{name}}}/secret_key
+              {{/repositories}}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Delete
+    whenScaled: Delete
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{{disk_size}}} }}

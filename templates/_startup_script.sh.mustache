@@ -42,12 +42,19 @@ YAML
 
 opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
 
-{{#repositories}}
-echo "Preparing client for s3 repository '{{name}}'"
+{{#has_repositories}}
 opensearch-plugin install repository-s3 --silent --batch
 
-echo "{{access_key}}" | opensearch-keystore add s3.client.{{name}}.access_key --stdin --force
-echo "{{secret_key}}" | opensearch-keystore add s3.client.{{name}}.secret_key --stdin --force
+# NOTE: repository credentials are added to the opensearch keystore in a separate init container
+if [ -f /tmp/keystore/opensearch.keystore ]; then
+  echo "Using shared keystore from /tmp/keystore/opensearch.keystore"
+  mv /tmp/keystore/opensearch.keystore config/opensearch.keystore
+fi
+{{/has_repositories}}
+
+{{#repositories}}
+echo "Preparing client for s3 repository '{{name}}'"
+
 echo "s3.client.{{name}}.endpoint: {{endpoint}}" >> config/opensearch.yml
 echo "s3.client.{{name}}.region: {{region}}" >> config/opensearch.yml
 echo "s3.client.{{name}}.protocol: {{protocol}}" >> config/opensearch.yml
