@@ -46,7 +46,7 @@ class OpensearchOperator
     secret = Kubernetes.secrets.get(secret_name, namespace: namespace)
 
     @metrics_password =
-      if secret["status"] == 404
+      if secret["code"] == 404
         password = SecureRandom.hex
         Kubernetes.secrets.create(
           metadata: {
