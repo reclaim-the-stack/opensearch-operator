@@ -49,14 +49,14 @@ class OpensearchOperator
       if secret["code"] == 404
         password = SecureRandom.hex
         Kubernetes.secrets.create(
-          metadata: {
-            name: secret_name,
-            namespace: namespace,
+          "metadata" => {
+            "name" => secret_name,
+            "namespace" => namespace,
           },
-          type: "kubernetes.io/basic-auth",
-          stringData: {
-            username: "metrics",
-            password:,
+          "type" => "kubernetes.io/basic-auth",
+          "stringData" => {
+            "username" => "metrics",
+            "password" => password,
           },
         )
         LOGGER.info "Created metrics basic auth secret #{namespace}/#{secret_name}"
