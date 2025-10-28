@@ -100,6 +100,10 @@ spec:
                         type: string
                       effect:
                         type: string
+                config:
+                  type: object
+                  description: Additional OpenSearch configuration merged into config/opensearch.yml.
+                  x-kubernetes-preserve-unknown-fields: true
                 snapshotRepositories:
                   type: array
                   description: List of snapshot repositories that should be created in the OpenSearch cluster.

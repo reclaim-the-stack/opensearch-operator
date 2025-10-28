@@ -69,6 +69,14 @@ echo "s3.client.{{name}}.region: {{region}}" >> config/opensearch.yml
 echo "s3.client.{{name}}.protocol: {{protocol}}" >> config/opensearch.yml
 {{/repositories}}
 
+{{#config_yaml_string}}
+cat >> config/opensearch.yml <<'USER_CONFIG'
+
+# User supplied configuration
+{{{config_yaml_string}}}
+USER_CONFIG
+{{/config_yaml_string}}
+
 echo "Starting OpenSearch with config:"
 cat config/opensearch.yml
 

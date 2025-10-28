@@ -6,6 +6,8 @@ metadata:
 spec:
   replicas: 3
   diskSize: 5Gi
+  config:
+    reindex.remote.allowlist: "remote-es-cluster:9200"
   nodeSelector:
     node-role.kubernetes.io/database: ""
   tolerations:

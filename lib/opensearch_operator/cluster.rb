@@ -4,6 +4,7 @@ require "bcrypt"
 
 require "securerandom"
 require "time"
+require "yaml"
 
 class OpensearchOperator
   class Cluster
@@ -317,8 +318,11 @@ class OpensearchOperator
         repository["secret_key_secret"] = repository.fetch("secretAccessKey")
       end
 
+      config_yaml_string = spec["config"].present? ? YAML.dump(spec["config"]).delete_prefix("---\n") : nil
+
       startup_script = Template["_startup_script"].render(
         creation_timestamp_epoch:,
+        config_yaml_string:,
         has_repositories: repositories.any?,
         name:,
         prometheus_exporter_version:,
