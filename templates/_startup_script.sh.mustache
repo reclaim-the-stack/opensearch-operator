@@ -42,6 +42,15 @@ YAML
 
 opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
 
+# If attempting to boot the Performance Analyzer CLI with default config, it just crashes at boot with:
+# Error: Could not find or load main class org.opensearch.performanceanalyzer.PerformanceAnalyzerApp
+#
+# It's also annoying to deploy since it has to be started as a separate process and can use up to 1GB of
+# memory based tmpfs disk at /dev/shm. Performance Analyzer is currently scheduled for deprecation so lets
+# focus on the prometheus metrics based approach instead for now:
+# https://github.com/opensearch-project/performance-analyzer/issues/585
+opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
+
 {{#has_repositories}}
 opensearch-plugin install repository-s3 --silent --batch
 
