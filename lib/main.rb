@@ -7,6 +7,7 @@ require "logger"
 
 require "active_support/all"
 require "concurrent"
+require "securerandom"
 
 begin
   require "debug"
@@ -31,7 +32,39 @@ class OpensearchOperator
     group: "opensearch.reclaim-the-stack.com",
     version: "v1alpha1",
   )
+  DEFAULT_OPERATOR_NAMESPACE = "opensearch-operator"
   HEALTH_POLL_INTERVAL = 15
+
+  # Lazily create or fetch the singleton metrics user password. The password is unique per
+  # installation of the operator, but shared across all OpenSearch clusters managed by it.
+  def self.metrics_password
+    return @metrics_password if @metrics_password
+
+    secret_name = "opensearch-metrics-basic-auth"
+    internal_namespace_file = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+    namespace = File.exists?(internal_namespace_file) ? File.read(internal_namespace_file) : DEFAULT_OPERATOR_NAMESPACE
+    secret = Kubernetes.secrets.get(secret_name, namespace: namespace)
+
+    @metrics_password =
+      if secret["status"] == 404
+        password = SecureRandom.hex
+        Kubernetes.secrets.create(
+          metadata: {
+            name: secret_name,
+            namespace: namespace,
+          },
+          type: "kubernetes.io/basic-auth",
+          stringData: {
+            username: "metrics",
+            password:,
+          },
+        )
+        LOGGER.info "Created metrics basic auth secret #{namespace}/#{secret_name}"
+        password
+      else
+        Base64.strict_decode64(secret.fetch("data").fetch("password"))
+      end
+  end
 
   def initialize
     @clusters = Concurrent::Hash.new # uid => cluster

@@ -11,18 +11,18 @@ spec:
       app.kubernetes.io/managed-by: opensearch-operator
       app.kubernetes.io/name: opensearch
   endpoints:
-  - port: http
-    scheme: http
-    path: /_prometheus/metrics
-    interval: 30s
-    scrapeTimeout: 10s
-    basicAuth:
-      username:
-        name: reclaim-the-stack-opensearch-metrics-basic-auth
-        key: username
-      password:
-        name: reclaim-the-stack-opensearch-metrics-basic-auth
-        key: password
+    - port: http
+      scheme: http
+      path: /_prometheus/metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      basicAuth:
+        username:
+          name: reclaim-the-stack-opensearch-metrics-basic-auth
+          key: username
+        password:
+          name: reclaim-the-stack-opensearch-metrics-basic-auth
+          key: password
 ---
 apiVersion: v1
 kind: Secret
@@ -32,4 +32,4 @@ metadata:
   namespace: monitoring
 stringData:
   username: metrics
-  password: metrics
+  password: <the-password-found-in-opensearch-operator/opensearch-metrics-basic-auth-secret>

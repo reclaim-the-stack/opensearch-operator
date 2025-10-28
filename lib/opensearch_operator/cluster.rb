@@ -214,7 +214,7 @@ class OpensearchOperator
       logstash_password = SecureRandom.hex
       readall_password = SecureRandom.hex
       snapshotrestore_password = SecureRandom.hex
-      metrics_password = "metrics"
+      metrics_password = OpensearchOperator.metrics_password
 
       secret = Template["credentials_secret"].render(
         name:,
