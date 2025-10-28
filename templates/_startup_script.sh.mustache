@@ -5,7 +5,7 @@ CLUSTER_CREATED_TIMESTAMP={{creation_timestamp_epoch}}
 CURRENT_TIMESTAMP=$(date +%s)
 if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
   echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
-  INITIAL_CLUSTER_MANAGER_NODES='"{{name}}-0"'
+  INITIAL_CLUSTER_MANAGER_NODES='"opensearch-{{name}}-0"'
 else
   echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
 fi
