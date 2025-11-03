@@ -547,6 +547,8 @@ prometheus_monitor_with_indices:
     - "cluster:monitor/stats"
     - "cluster:monitor/nodes/info"
     - "cluster:monitor/nodes/stats"
+  # NOTE: We're disabling index metrics scraping by default right now but
+  # keeping the role ready for index metrics if needed in the future.
   index_permissions:
     - index_patterns: ["*"]
       allowed_actions:

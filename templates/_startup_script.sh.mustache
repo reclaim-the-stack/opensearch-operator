@@ -38,6 +38,9 @@ plugins.security.nodes_dn:
   - CN=opensearch-node
 
 plugins.security.allow_default_init_securityindex: true
+
+# Disable index-level metrics to avoid high-cardinality labels in Prometheus
+prometheus.indices: false
 YAML
 
 opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
