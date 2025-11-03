@@ -5,6 +5,8 @@ metadata:
   namespace: opensearch-operator
 spec:
   replicas: 1
+  strategy:
+    type: Recreate # Ensure only one operator pod runs at any given time
   selector:
     matchLabels: { app: opensearch-operator }
   template:
