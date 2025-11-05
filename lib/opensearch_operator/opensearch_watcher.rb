@@ -92,6 +92,7 @@ class OpensearchOperator
           yield(new_state, changed_keys)
         end
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
+        Sentry.capture_exception(e)
         LOGGER.warn "class=OpensearchWatcher error=#{e.class} url=#{@url_without_basicauth} message=#{e.message}"
       ensure
         sleep CHECK_INTERVAL

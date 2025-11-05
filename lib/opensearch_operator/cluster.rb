@@ -96,6 +96,7 @@ class OpensearchOperator
         begin
           @watcher.client.snapshot.create_repository(params)
         rescue StandardError => e
+          Sentry.capture_exception(e)
           LOGGER.error "Failed to upsert snapshot repository for cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
           next
         end
@@ -121,6 +122,7 @@ class OpensearchOperator
 
       CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params:)
     rescue StandardError => e
+      Sentry.capture_exception(e)
       LOGGER.error "Failed to update status for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
 

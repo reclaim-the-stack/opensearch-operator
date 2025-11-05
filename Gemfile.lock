@@ -43,6 +43,7 @@ GEM
       irb (~> 1.10)
       reline (>= 0.3.8)
     diff-lcs (1.6.2)
+    dotenv (3.1.8)
     drb (2.2.3)
     erb (5.0.2)
     faraday (2.13.4)
@@ -71,6 +72,7 @@ GEM
     opensearch-ruby (3.4.0)
       faraday (>= 1.0, < 3)
       multi_json (>= 1.0)
+    openssl (3.3.2)
     parallel (1.27.0)
     parser (3.3.9.0)
       ast (~> 2.4.1)
@@ -135,6 +137,9 @@ GEM
       rubocop-rspec (~> 3.5)
     ruby-progressbar (1.13.0)
     securerandom (0.4.1)
+    sentry-ruby (6.1.0)
+      bigdecimal
+      concurrent-ruby (~> 1.0, >= 1.0.2)
     stringio (3.1.7)
     tzinfo (2.0.6)
       concurrent-ruby (~> 1.0)
@@ -155,10 +160,13 @@ DEPENDENCIES
   bcrypt
   concurrent-ruby-ext
   debug
+  dotenv
   mustache
   opensearch-ruby
+  openssl (~> 3.3)
   rspec
   rubocop-mynewsdesk!
+  sentry-ruby
   webmock
 
 BUNDLED WITH

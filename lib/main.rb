@@ -2,6 +2,13 @@
 
 require "bundler/setup"
 
+begin
+  require "debug"
+  require "dotenv/load"
+rescue LoadError
+  # only available in development / test environments
+end
+
 require "json"
 require "logger"
 
@@ -9,17 +16,14 @@ require "active_support/all"
 require "concurrent"
 require "securerandom"
 
-begin
-  require "debug"
-rescue LoadError
-  # only available in development / test environments
-end
+
+require_relative "kubernetes"
+require_relative "sentry"
 
 require_relative "opensearch_operator/certificate_generator"
 require_relative "opensearch_operator/cluster"
 require_relative "opensearch_operator/template"
 require_relative "opensearch_operator/opensearch_watcher"
-require_relative "kubernetes"
 
 Kubernetes.field_manager = "opensearch-operator"
 

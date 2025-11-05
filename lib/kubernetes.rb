@@ -205,6 +205,7 @@ module Kubernetes
         end
       rescue Error, *TRANSIENT_NET_ERRORS => e
         LOGGER.error "class=Kubernetes::Resource message=watch-error error_class=#{e.class} error_message=#{e.message}"
+        Sentry.capture_exception(e)
         sleep 5
         retry
       end
@@ -354,7 +355,8 @@ module Kubernetes
         end
         LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
-      rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT
+      rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT => e
+        Sentry.capture_exception(e)
         connection_pool.discard(connection)
         raise
       end
