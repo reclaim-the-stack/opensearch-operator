@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: operator
-          image: ghcr.io/reclaim-the-stack/opensearch-operator:0.9.5
+          image: ghcr.io/reclaim-the-stack/opensearch-operator:0.9.6
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
