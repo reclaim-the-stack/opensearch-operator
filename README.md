@@ -50,6 +50,48 @@ Look at the example files to understand the CRD structure.
 
 TODO: add comprehensive documentation.
 
+## Integrate with prometheus operator for metrics
+
+Note: This assumes you're running Reclaim the Stack with `kube-prometheus-stack` running in the `monitoring` namespace and is using Sealed Secrets for secrets management. Adjust as needed.
+
+Run from your gitops repository:
+
+```bash
+echo 'apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: reclaim-the-stack-opensearch
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: opensearch-operator
+      app.kubernetes.io/name: opensearch
+  endpoints:
+    - port: http
+      scheme: http
+      path: /_prometheus/metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      basicAuth:
+        username:
+          name: opensearch-servicemonitor-basic-auth
+          key: username
+        password:
+          name: opensearch-servicemonitor-basic-auth
+          key: password
+' > platform/kube-prometheus-stack/opensearch-servicemonitor.yaml
+
+metrics_password=`kubectl get secret opensearch-metrics-basic-auth -n opensearch-operator -o yaml | yq .data.password | base64 -d`
+kubectl create secret generic opensearch-servicemonitor-basic-auth -n monitoring --dry-run=client --from-literal=username=metrics --from-literal password=$metrics_password -o yaml | kubeseal -o yaml >> platform/kube-prometheus-stack/opensearch-servicemonitor.yaml
+```
+
+Now add the new manifest file to the resources list in `platform/kube-prometheus-stack/kustomization.yaml` and push the files.
+
+You should now get metrics from your OpenSearch clusters into Prometheus. Add the `examples/opensearch-grafana-dashboard.json` dashboard into Grafana to view the metrics.
+
 ## Development
 
 Prerequisites: Ruby 3.4.5

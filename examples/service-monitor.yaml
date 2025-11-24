@@ -18,17 +18,17 @@ spec:
       scrapeTimeout: 10s
       basicAuth:
         username:
-          name: reclaim-the-stack-opensearch-metrics-basic-auth
+          name: opensearch-servicemonitor-basic-auth
           key: username
         password:
-          name: reclaim-the-stack-opensearch-metrics-basic-auth
+          name: opensearch-servicemonitor-basic-auth
           key: password
 ---
 apiVersion: v1
 kind: Secret
 type: kubernetes.io/basic-auth
 metadata:
-  name: reclaim-the-stack-opensearch-metrics-basic-auth
+  name: opensearch-servicemonitor-basic-auth
   namespace: monitoring
 stringData:
   username: metrics
