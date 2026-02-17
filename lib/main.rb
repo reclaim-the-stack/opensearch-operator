@@ -47,7 +47,7 @@ class OpensearchOperator
     secret_name = "opensearch-metrics-basic-auth"
     internal_namespace_file = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
     namespace = File.exist?(internal_namespace_file) ? File.read(internal_namespace_file) : DEFAULT_OPERATOR_NAMESPACE
-    secret = Kubernetes.secrets.get(secret_name, namespace: namespace)
+    secret = Kubernetes.secrets.get(secret_name, namespace:)
 
     @metrics_password =
       if secret["code"] == 404
