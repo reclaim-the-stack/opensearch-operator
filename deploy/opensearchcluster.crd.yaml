@@ -114,6 +114,7 @@ spec:
                       - name
                       - type
                       - bucket
+                      - base_path
                       - accessKeyId
                       - secretAccessKey
                       - policies
