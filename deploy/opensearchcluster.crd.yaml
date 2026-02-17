@@ -196,6 +196,9 @@ spec:
             status:
               type: object
               properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
                 health:
                   type: string
                 nodes:
