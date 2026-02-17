@@ -16,7 +16,6 @@ require "active_support/all"
 require "concurrent"
 require "securerandom"
 
-
 require_relative "kubernetes"
 require_relative "sentry"
 
