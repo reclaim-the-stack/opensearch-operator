@@ -41,6 +41,15 @@ class OpensearchOperator
     end
 
     def reconsile
+      generation = @manifest.fetch("metadata").fetch("generation")
+      observed_generation = @manifest.dig("status", "observedGeneration")
+
+      if observed_generation && observed_generation >= generation
+        LOGGER.info "Generation #{generation} already observed for #{namespace}/#{name}, skipping reconciliation steps"
+        initialize_or_trigger_watcher
+        return
+      end
+
       ensure_credentials_secret
       ensure_certificates_secret
       ensure_security_config
@@ -50,6 +59,7 @@ class OpensearchOperator
       ensure_dashboards_service
 
       initialize_or_trigger_watcher
+      record_observed_generation(generation)
     end
 
     def initialize_or_trigger_watcher
@@ -394,6 +404,13 @@ class OpensearchOperator
           "blockOwnerDeletion" => true,
         },
       ].to_json
+    end
+
+    def record_observed_generation(generation)
+      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: { observedGeneration: generation } })
+    rescue StandardError => e
+      Sentry.capture_exception(e)
+      LOGGER.error "Failed to record observedGeneration for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
   end
 end
