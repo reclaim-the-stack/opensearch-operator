@@ -1,0 +1,28 @@
+# Service for application clients.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-%{name}-client
+  namespace: %{namespace}
+  labels:
+    app.kubernetes.io/managed-by: opensearch-operator
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: %{name}
+  ownerReferences: %{owner_references}
+spec:
+  type: ClusterIP
+  ports:
+    - name: "http"
+      port: 9200
+      targetPort: 9200
+    - name: "transport"
+      port: 9300
+      targetPort: 9300
+    - name: "metrics"
+      port: 9600
+      targetPort: 9600
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: %{name}

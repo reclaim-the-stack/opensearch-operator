@@ -54,6 +54,7 @@ class OpensearchOperator
       ensure_certificates_secret
       ensure_security_config
       ensure_service
+      ensure_client_service
       ensure_statefulset
       ensure_dashboards_deployment
       ensure_dashboards_service
@@ -67,7 +68,7 @@ class OpensearchOperator
         @watcher.on_green { upsert_snapshot_repositories }
       else
         # CLUSTER_HOST_OVERRIDE=localhost can be used for testing with port-forwarded clusters
-        host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}.#{namespace}.svc.cluster.local"
+        host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}-client.#{namespace}.svc.cluster.local"
         cluster_url = "http://admin:#{admin_password}@#{host}:9200"
         @watcher = OpensearchWatcher.new(cluster_url)
         @watcher.on_green { upsert_snapshot_repositories }
@@ -112,7 +113,6 @@ class OpensearchOperator
         end
 
         LOGGER.info "Ensured snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
-
 
         reconcile_snapshot_policies(repository_name, repository.fetch("policies"), existing_policies)
       end
@@ -307,6 +307,16 @@ class OpensearchOperator
       Kubernetes.services.apply(service)
     end
 
+    def ensure_client_service
+      client_service = Template["client_service"].render(
+        name:,
+        namespace:,
+        owner_references:,
+      )
+
+      Kubernetes.services.apply(client_service)
+    end
+
     def ensure_statefulset
       creation_timestamp_epoch = Time.parse(@manifest.dig("metadata", "creationTimestamp")).to_i
       node_selector = spec["nodeSelector"].to_json
@@ -316,9 +326,6 @@ class OpensearchOperator
       # Prometheus exporter plugin version must be synced with OpenSearch version:
       # https://github.com/opensearch-project/opensearch-prometheus-exporter/blob/main/COMPATIBILITY.md
       prometheus_exporter_version = "#{version}.0"
-
-      # local cache for repository secrets in the shape { name => secret }
-      repository_secrets = {}
 
       repositories = spec["snapshotRepositories"] || []
       repositories.each do |repository|
@@ -371,7 +378,7 @@ class OpensearchOperator
 
     def ensure_dashboards_deployment
       dashboards_image = "opensearchproject/opensearch-dashboards:#{version}"
-      opensearch_hosts = "http://opensearch-#{name}.#{namespace}.svc.cluster.local:9200"
+      opensearch_hosts = "http://opensearch-#{name}-client.#{namespace}.svc.cluster.local:9200"
 
       dashboards_deployment = Template["dashboards_deployment"].render(
         dashboards_image:,
