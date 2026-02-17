@@ -19,6 +19,7 @@
 
 - Don't abbreviate names of methods / variables
 - Avoid small methods, prefer inlining code unless there is clear re-use
+- Avoid defensive code unless there is a clear reason to expect invalid input
 - Indentation: 2 spaces; no tabs.
 - Add `# frozen_string_literal: true` to Ruby files.
 
