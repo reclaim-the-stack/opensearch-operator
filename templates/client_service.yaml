@@ -16,13 +16,6 @@ spec:
     - name: "http"
       port: 9200
       targetPort: 9200
-    - name: "transport"
-      port: 9300
-      targetPort: 9300
-    - name: "metrics"
-      port: 9600
-      targetPort: 9600
-  publishNotReadyAddresses: false
   selector:
     app.kubernetes.io/name: opensearch
     opensearch.reclaim-the-stack.com/cluster: %{name}
