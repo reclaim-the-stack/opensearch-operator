@@ -199,6 +199,9 @@ spec:
                 observedGeneration:
                   type: integer
                   format: int64
+                operatorManifestVersion:
+                  type: integer
+                  format: int64
                 health:
                   type: string
                 nodes:

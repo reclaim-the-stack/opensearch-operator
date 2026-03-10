@@ -8,6 +8,9 @@ require "yaml"
 
 class OpensearchOperator
   class Cluster
+    # Bump when operator-managed manifests change and existing clusters must be reconciled again.
+    MANIFEST_VERSION = 1
+
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
     def initialize(manifest)
@@ -43,9 +46,10 @@ class OpensearchOperator
     def reconsile
       generation = @manifest.fetch("metadata").fetch("generation")
       observed_generation = @manifest.dig("status", "observedGeneration")
+      observed_manifest_version = @manifest.dig("status", "operatorManifestVersion")
 
-      if observed_generation && observed_generation >= generation
-        LOGGER.info "Generation #{generation} already observed for #{namespace}/#{name}, skipping reconciliation steps"
+      if observed_generation && observed_generation >= generation && observed_manifest_version == MANIFEST_VERSION
+        LOGGER.info "Generation #{generation} and manifest version #{MANIFEST_VERSION} already observed for #{namespace}/#{name}, skipping reconciliation steps"
         initialize_or_trigger_watcher
         return
       end
@@ -60,7 +64,7 @@ class OpensearchOperator
       ensure_dashboards_service
 
       initialize_or_trigger_watcher
-      record_observed_generation(generation)
+      record_observed_state(generation)
     end
 
     def initialize_or_trigger_watcher
@@ -413,11 +417,21 @@ class OpensearchOperator
       ].to_json
     end
 
-    def record_observed_generation(generation)
-      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: { observedGeneration: generation } })
+    def record_observed_state(generation)
+      CLUSTERS_RESOURCE.patch(
+        name,
+        namespace:,
+        subresource: "status",
+        params: {
+          status: {
+            observedGeneration: generation,
+            operatorManifestVersion: MANIFEST_VERSION,
+          },
+        },
+      )
     rescue StandardError => e
       Sentry.capture_exception(e)
-      LOGGER.error "Failed to record observedGeneration for #{namespace}/#{name}: #{e.class}: #{e.message}"
+      LOGGER.error "Failed to record observed state for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
   end
 end
