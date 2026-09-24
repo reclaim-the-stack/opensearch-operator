@@ -29,6 +29,7 @@ Notable features:
 - Ready to integrate with prometheus operator via a single `ServiceMonitor` and Grafana with a dashboard JSON template
 - Fully declarative snapshot management
 - Intelligent JVM heap management (50% of available RAM up to a cap of 31GB to avoid compressed oops)
+- Health gated rolling restarts: pods are restarted one at a time, waiting for green cluster health in between (see below)
 
 Notable limitations:
 - No functionality to create custom users and roles
@@ -49,6 +50,19 @@ Feel free to open a pull request if you are missing anything 🙏
 Look at the example files to understand the CRD structure.
 
 TODO: add comprehensive documentation.
+
+## Rolling restarts
+
+The StatefulSet uses the `OnDelete` update strategy, so Kubernetes never restarts pods on its own when the pod template changes (version upgrade, resource changes, new snapshot repositories etc). Instead the operator restarts pods one at a time following the [OpenSearch rolling upgrade procedure](https://docs.opensearch.org/latest/migrate-or-upgrade/rolling-upgrade/):
+
+1. Wait for all pods to be ready and all nodes to have joined the cluster
+2. Wait for green cluster health
+3. Disable replica shard allocation, flush, delete the next pod (highest ordinal first, cluster manager last)
+4. Once the pod has rejoined, re-enable replica shard allocation and repeat
+
+A yellow cluster with no shard recovery in progress (no initializing, relocating or delayed shards) is tolerated for 5 minutes, after which the rollout proceeds anyway with a warning event. This avoids rollouts getting stuck forever on shards that can't be assigned regardless of node restarts. A red cluster always blocks the rollout.
+
+Follow along with `kubectl get opensearch` (the `Phase` column) and `kubectl describe opensearch <name>` (events).
 
 ## Integrate with prometheus operator for metrics
 

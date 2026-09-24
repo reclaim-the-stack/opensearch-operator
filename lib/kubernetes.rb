@@ -331,6 +331,14 @@ module Kubernetes
       @deployments ||= Resource.new("deployments", group: "apps")
     end
 
+    def events
+      @events ||= Resource.new("events")
+    end
+
+    def pods
+      @pods ||= Resource.new("pods")
+    end
+
     def statefulsets
       @statefulsets ||= Resource.new("statefulsets", group: "apps")
     end

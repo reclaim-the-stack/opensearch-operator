@@ -23,6 +23,7 @@ require_relative "opensearch_operator/certificate_generator"
 require_relative "opensearch_operator/cluster"
 require_relative "opensearch_operator/template"
 require_relative "opensearch_operator/opensearch_watcher"
+require_relative "opensearch_operator/rolling_restart"
 
 Kubernetes.field_manager = "opensearch-operator"
 

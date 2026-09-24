@@ -15,6 +15,9 @@ spec:
   serviceName: opensearch-{{{name}}}
   # To reach quorum during bootstrapping we can't wait for each pod to be ready before starting the next
   podManagementPolicy: Parallel
+  # Pods are restarted one at a time by the operator, gated on OpenSearch cluster health (see RollingRestart)
+  updateStrategy:
+    type: OnDelete
   replicas: {{{replicas}}}
   selector:
     matchLabels:

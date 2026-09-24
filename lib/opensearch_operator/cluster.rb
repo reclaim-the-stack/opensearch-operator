@@ -9,7 +9,7 @@ require "yaml"
 class OpensearchOperator
   class Cluster
     # Bump when operator-managed manifests change and existing clusters must be reconciled again.
-    MANIFEST_VERSION = 1
+    MANIFEST_VERSION = 2
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
@@ -26,6 +26,7 @@ class OpensearchOperator
     def disk_size = spec.fetch("diskSize")
 
     def version = image.split(":").last
+    def statefulset_name = "opensearch-#{name}"
 
     delegate :equal?, to: :@manifest
     delegate :dig, to: :@manifest
@@ -71,11 +72,13 @@ class OpensearchOperator
       if @watcher
         @watcher.on_green { upsert_snapshot_repositories }
       else
-        # CLUSTER_HOST_OVERRIDE=localhost can be used for testing with port-forwarded clusters
-        host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}-client.#{namespace}.svc.cluster.local"
-        cluster_url = "http://admin:#{admin_password}@#{host}:9200"
+        # CLUSTER_HOST_OVERRIDE=localhost:9201 can be used for testing with port-forwarded clusters
+        host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}-client.#{namespace}.svc.cluster.local:9200"
+        cluster_url = "http://admin:#{admin_password}@#{host}"
         @watcher = OpensearchWatcher.new(cluster_url)
         @watcher.on_green { upsert_snapshot_repositories }
+        rolling_restart = RollingRestart.new(self, @watcher.client)
+        @watcher.on_poll { |health, nodes| rolling_restart.tick(health, nodes) }
         @watcher.run do |new_state, changed_keys|
           update_status(new_state, changed_keys)
         end
@@ -138,6 +141,46 @@ class OpensearchOperator
     rescue StandardError => e
       Sentry.capture_exception(e)
       LOGGER.error "Failed to update status for #{namespace}/#{name}: #{e.class}: #{e.message}"
+    end
+
+    # Sets status.phase (visible in `kubectl get opensearch`), skipping the API call when unchanged
+    def update_phase(phase)
+      return if @phase == phase
+
+      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: { phase: } })
+      @phase = phase
+    rescue StandardError => e
+      Sentry.capture_exception(e)
+      LOGGER.error "Failed to update phase for #{namespace}/#{name}: #{e.class}: #{e.message}"
+    end
+
+    # Emits a Kubernetes Event attached to the OpenSearch resource (visible in `kubectl describe opensearch`)
+    def emit_event(reason, message, type: "Normal")
+      LOGGER.info "event=#{reason} type=#{type} cluster=#{namespace}/#{name} message=#{message}"
+
+      timestamp = Time.now.utc.iso8601
+      response = Kubernetes.events.create(
+        "metadata" => { "generateName" => "#{name}.", "namespace" => namespace },
+        "involvedObject" => {
+          "apiVersion" => @manifest.fetch("apiVersion"),
+          "kind" => @manifest.fetch("kind"),
+          "name" => name,
+          "namespace" => namespace,
+          "uid" => uid,
+        },
+        "reason" => reason,
+        "message" => message,
+        "type" => type,
+        "source" => { "component" => "opensearch-operator" },
+        "reportingComponent" => "opensearch-operator",
+        "firstTimestamp" => timestamp,
+        "lastTimestamp" => timestamp,
+        "count" => 1,
+      )
+      raise Kubernetes::Error, "#{response['code']} #{response['message']}" if response["kind"] == "Status"
+    rescue StandardError => e
+      Sentry.capture_exception(e)
+      LOGGER.error "Failed to emit event #{reason} for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
 
     private
@@ -358,6 +401,19 @@ class OpensearchOperator
       memory_in_bytes = Kubernetes.parse_memory(memory)
       heap_in_bytes = [memory_in_bytes / 2, 31.gigabytes].min
       heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
+
+      # StatefulSets created before the switch to the OnDelete update strategy carry an API server defaulted
+      # spec.updateStrategy.rollingUpdate.partition field which no field manager owns. Server side apply can't
+      # remove it and the API server rejects OnDelete combined with rollingUpdate, so we merge patch it away first.
+      existing_statefulset = Kubernetes.statefulsets.get(statefulset_name, namespace:)
+      if existing_statefulset.dig("spec", "updateStrategy", "type") == "RollingUpdate"
+        LOGGER.info "Migrating StatefulSet #{namespace}/#{statefulset_name} to the OnDelete update strategy"
+        Kubernetes.statefulsets.patch(
+          statefulset_name,
+          namespace:,
+          params: { spec: { updateStrategy: { type: "OnDelete", rollingUpdate: nil } } },
+        )
+      end
 
       statefulset = Template["statefulset"].render(
         disk_size:,
