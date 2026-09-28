@@ -69,14 +69,14 @@ Follow along with `kubectl get opensearch` (the `Phase` column) and `kubectl des
 
 Lowering `spec.replicas` removes the pods with the highest ordinals, but only once that's safe. Removing them straight away would delete their volumes along with any shard that only had copies on them, and removing half or more of the (all cluster manager eligible) nodes at once would cost the cluster its quorum. Instead the operator:
 
-1. Waits for all pods to be ready and all nodes to have joined the cluster
+1. Waits for the remaining pods to be ready and their nodes to have joined the cluster. The leaving pods don't have to be available, eg. pods of a scale up which never got scheduled, or a pod stuck on a Kubernetes node which is gone for good.
 2. Excludes the leaving nodes from shard allocation (`cluster.routing.allocation.exclude._name`) and waits for OpenSearch to migrate their shards to the remaining nodes
-3. Once the leaving nodes hold no shards, and the cluster health isn't red, excludes them from the cluster manager voting configuration and lowers the StatefulSet replicas
-4. Once the removed pods are gone, clears the allocation and voting configuration exclusions
+3. Once the cluster state shows no shards on the leaving nodes and no unassigned primary shards (recovering those might need data which only remains on a leaving node), excludes the leaving nodes from the cluster manager voting configuration and lowers the StatefulSet replicas. At most 10 nodes are removed per step since that's the default limit of voting configuration exclusions.
+4. Once the removed nodes have left the cluster, clears the allocation and voting configuration exclusions
 
 Rolling restarts wait for an ongoing scale down to finish. Raising the replicas again while shards are being migrated (step 2) cancels the scale down.
 
-The remaining nodes need room for all shards. The scale down waits for as long as shards can't be moved, eg. when an index has more replicas than the remaining nodes can hold or disk watermarks are exceeded (`GET _cluster/allocation/explain` tells why). If a leaving node can't rejoin the cluster (eg. its Kubernetes node is gone for good) and the cluster is green without it, finish the scale down by hand with `kubectl scale statefulset opensearch-<name> --replicas=<replicas>`.
+The remaining nodes need room for all shards. The scale down waits for as long as shards can't be moved, eg. when an index has more replicas than the remaining nodes can hold or disk watermarks are exceeded (`GET _cluster/allocation/explain` tells why).
 
 The operator manages `cluster.routing.allocation.exclude._name` and the voting configuration exclusions, so don't use them to drain nodes by hand (`cluster.routing.allocation.exclude._ip` works).
 
