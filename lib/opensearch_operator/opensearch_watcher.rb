@@ -93,8 +93,19 @@ class OpensearchOperator
           end
         end
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
-        Sentry.capture_exception(e)
+        # An unreachable cluster is expected at times (bootstrapping, full outage) so we report it as a warning
+        # rather than an error to stay out of alerting, and surface it via the status instead.
         LOGGER.warn "class=OpensearchWatcher error=#{e.class} url=#{@url_without_basicauth} message=#{e.message}"
+        Sentry.capture_exception(e, level: :warning, fingerprint: ["opensearch-unreachable", @url_without_basicauth])
+
+        unless @state[:status] == "unreachable"
+          @state = @state.merge(status: "unreachable")
+          yield(@state, [:status])
+        end
+      rescue StandardError => e
+        # Anything else is a bug, but must not kill the watcher thread
+        Sentry.capture_exception(e)
+        LOGGER.error "class=OpensearchWatcher action=poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
       ensure
         sleep CHECK_INTERVAL
       end

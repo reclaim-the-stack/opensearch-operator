@@ -368,7 +368,8 @@ module Kubernetes
         LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
       rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT => e
-        Sentry.capture_exception(e)
+        transient = TRANSIENT_NET_ERRORS.any? { |error_class| e.is_a?(error_class) }
+        Sentry.capture_exception(e, level: transient ? :warning : :error)
         connection_pool.discard(connection)
         raise
       end
