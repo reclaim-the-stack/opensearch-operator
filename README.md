@@ -45,7 +45,7 @@ Feel free to open a pull request if you are missing anything 🙏
 
 - Deploy the operator: `kubectl apply -k deploy/`
 - Create sample cluster: `kubectl apply -f examples/simple.yaml`
-- Inspect: `kubectl get opensearch`
+- Inspect: `kubectl get opensearch` (the `Health` column shows `Unreachable` when the operator can't reach the cluster)
 
 Look at the example files to understand the CRD structure.
 

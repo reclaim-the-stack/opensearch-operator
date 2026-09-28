@@ -152,4 +152,12 @@ class OpensearchOperator
   end
 end
 
-OpensearchOperator.new.run if $PROGRAM_NAME == __FILE__
+if $PROGRAM_NAME == __FILE__
+  begin
+    OpensearchOperator.new.run
+  rescue StandardError => e
+    # Report crashes before the process exits, Sentry has no hook for unhandled exceptions on its own
+    Sentry.capture_exception(e)
+    raise
+  end
+end
