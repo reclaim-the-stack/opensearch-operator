@@ -45,6 +45,7 @@ spec:
                   pattern: :[0-9]+\.[0-9]+\.[0-9]+$ # validate that the tag is in semver format
                 replicas:
                   type: integer
+                  description: Number of OpenSearch nodes. Lowering it migrates shards off the highest ordinal nodes before removing them.
                   minimum: 3
                   default: 3
                 diskSize:

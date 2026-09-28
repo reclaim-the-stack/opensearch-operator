@@ -423,6 +423,10 @@ class OpensearchOperator
         )
       end
 
+      # RollingRestart owns the replicas of an existing StatefulSet since removing nodes requires draining them first.
+      # NOTE: The spec replicas only apply on a 404, Resource#get raises on any other API error.
+      statefulset_replicas = existing_statefulset.dig("spec", "replicas") || replicas
+
       statefulset = Template["statefulset"].render(
         disk_size:,
         has_repositories: repositories.any?,
@@ -432,7 +436,7 @@ class OpensearchOperator
         namespace:,
         node_selector:,
         owner_references:,
-        replicas:,
+        replicas: statefulset_replicas,
         repositories:,
         repository_secrets_path: "/tmp/repository_secrets",
         resources:,

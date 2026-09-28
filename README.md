@@ -30,6 +30,7 @@ Notable features:
 - Fully declarative snapshot management
 - Intelligent JVM heap management (50% of available RAM up to a cap of 31GB to avoid compressed oops)
 - Health gated rolling restarts: pods are restarted one at a time, waiting for green cluster health in between (see below)
+- Safe scale downs: shards and cluster manager votes are migrated off leaving nodes before their pods are removed (see below)
 
 Notable limitations:
 - No functionality to create custom users and roles
@@ -63,6 +64,21 @@ The StatefulSet uses the `OnDelete` update strategy, so Kubernetes never restart
 A yellow cluster with no shard recovery in progress (no initializing, relocating or delayed shards) is tolerated for 5 minutes, after which the rollout proceeds anyway with a warning event. This avoids rollouts getting stuck forever on shards that can't be assigned regardless of node restarts. A red cluster always blocks the rollout.
 
 Follow along with `kubectl get opensearch` (the `Phase` column) and `kubectl describe opensearch <name>` (events).
+
+## Scaling down
+
+Lowering `spec.replicas` removes the pods with the highest ordinals, but only once that's safe. Removing them straight away would delete their volumes along with any shard that only had copies on them, and removing half or more of the (all cluster manager eligible) nodes at once would cost the cluster its quorum. Instead the operator:
+
+1. Waits for the remaining pods to be ready and their nodes to have joined the cluster. The leaving pods don't have to be available, eg. pods of a scale up which never got scheduled, or a pod stuck on a Kubernetes node which is gone for good.
+2. Excludes the leaving nodes from shard allocation (`cluster.routing.allocation.exclude._name`) and waits for OpenSearch to migrate their shards to the remaining nodes
+3. Once the cluster state shows no shards on the leaving nodes and no unassigned primary shards (recovering those might need data which only remains on a leaving node), excludes the leaving nodes from the cluster manager voting configuration and lowers the StatefulSet replicas. At most 10 nodes are removed per step since that's the default limit of voting configuration exclusions.
+4. Once the removed nodes have left the cluster, clears the allocation and voting configuration exclusions
+
+Rolling restarts wait for an ongoing scale down to finish. Raising the replicas again while shards are being migrated (step 2) cancels the scale down.
+
+The remaining nodes need room for all shards. The scale down waits for as long as shards can't be moved, eg. when an index has more replicas than the remaining nodes can hold or disk watermarks are exceeded (`GET _cluster/allocation/explain` tells why).
+
+The operator manages `cluster.routing.allocation.exclude._name` and the voting configuration exclusions, so don't use them to drain nodes by hand (`cluster.routing.allocation.exclude._ip` works).
 
 ## Integrate with prometheus operator for metrics
 

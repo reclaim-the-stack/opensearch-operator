@@ -95,9 +95,14 @@ module Kubernetes
       JSON.parse(response.body)
     end
 
+    # Returns the resource, or the Status object of a 404 response. Other errors raise, like the other methods do.
     def get(name, namespace:)
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}"
       response = Kubernetes.get(path, {})
+      unless response.code.start_with?("2") || response.code == "404"
+        raise Error, "Get #{@plural}/#{name} in namespace #{namespace} failed: #{response.code} #{response.body}"
+      end
+
       JSON.parse(response.body)
     end
 
