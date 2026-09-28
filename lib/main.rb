@@ -86,6 +86,7 @@ class OpensearchOperator
 
       type = event.fetch("type")
       cluster_manifest = event.fetch("object")
+      namespace = cluster_manifest.dig("metadata", "namespace")
       name = cluster_manifest.dig("metadata", "name")
       resource_version = cluster_manifest.dig("metadata", "resourceVersion")
 
@@ -98,10 +99,10 @@ class OpensearchOperator
         finalize(cluster_manifest)
       end
     rescue StandardError => e
-      # One failing cluster must neither take down the operator nor stall the events of the other clusters
+      # One failing cluster must neither take down the operator nor stall the events of the other clusters. Its events
+      # are handled again on the next change or watch resync (see Kubernetes::WATCH_RESYNC_INTERVAL).
       Sentry.capture_exception(e)
-      LOGGER.error "Failed to handle #{type} event for #{cluster_manifest&.dig('metadata', 'namespace')}/#{name}: " \
-                   "#{e.class}: #{e.message}"
+      LOGGER.error "Failed to handle #{type} event for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
   end
 
