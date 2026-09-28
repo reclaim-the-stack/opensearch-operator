@@ -46,12 +46,9 @@ class OpensearchOperator
       self
     end
 
-    def on_green(&block)
-      if @state[:status] == "green"
-        block.call
-      else
-        @on_green_callback = block
-      end
+    # Called on every poll with the raw cluster health and _cat/nodes responses, regardless of state changes
+    def on_poll(&block)
+      @on_poll_callback = block
     end
 
     def stop
@@ -78,11 +75,6 @@ class OpensearchOperator
 
         # LOGGER.debug "class=OpensearchWatcher action=refresh-state url=#{@url} changed_keys=#{changed_keys.join(",")}"
 
-        if @on_green_callback && status == "green"
-          @on_green_callback.call
-          @on_green_callback = nil
-        end
-
         if changed_keys.any?
           @state = new_state
 
@@ -90,6 +82,15 @@ class OpensearchOperator
           LOGGER.info "class=OpensearchWatcher action=state-changed url=#{@url_without_basicauth} changes=#{changes}"
 
           yield(new_state, changed_keys)
+        end
+
+        if @on_poll_callback
+          begin
+            @on_poll_callback.call(health, nodes)
+          rescue StandardError => e
+            Sentry.capture_exception(e)
+            LOGGER.error "class=OpensearchWatcher action=on-poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
+          end
         end
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
         Sentry.capture_exception(e)
