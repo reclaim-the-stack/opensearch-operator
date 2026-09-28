@@ -20,7 +20,7 @@ require_relative "non_reentrant_connection_pool"
 #   Kubernetes.statefulsets.list(namespace: "default")
 #   Kubernetes.secrets.get("my-secret", namespace: "default")
 #   Kubernetes.services.create({ ... })
-#   Kubernetes.deploymnents.watch(namespace: "default", resource_version: "12345") do |event|
+#   Kubernetes.deployments.watch(namespace: "default") do |event|
 #     puts event
 #   end
 #
@@ -39,7 +39,10 @@ module Kubernetes
   TRANSIENT_NET_ERRORS = [
     EOFError,
     IOError,
+    Errno::ECONNREFUSED,
     Errno::ECONNRESET,
+    Errno::EHOSTUNREACH,
+    Errno::ENETUNREACH,
     Errno::EPIPE,
     Errno::ETIMEDOUT,
     Errno::EBADF,
@@ -47,7 +50,14 @@ module Kubernetes
     Net::ReadTimeout,
     Net::WriteTimeout,
     Net::HTTPBadResponse,
+    OpenSSL::SSL::SSLError,
+    SocketError,
   ].freeze
+
+  # Watch requests are ended by the server after this long (timeoutSeconds) and then resumed, which also bounds how long
+  # a connection that died without being closed can go unnoticed. Bookmarks can't serve that purpose as the API server
+  # doesn't guarantee sending any.
+  WATCH_TIMEOUT = 5.minutes
 
   # Returns the memory size in bytes
   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#meaning-of-memory
@@ -176,47 +186,112 @@ module Kubernetes
       JSON.parse(response.body)
     end
 
-    def watch(namespace: nil, resource_version: nil)
-      params = { watch: 1, resourceVersion: resource_version, allowWatchBookmarks: true }
+    # Yields the ADDED, MODIFIED and DELETED events of the collection until the process exits. The current state comes
+    # first, as ADDED events streamed by the watch itself, so no separate list request is needed:
+    # https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
+    #
+    # Interrupted watches resume from the last resource version, with exponential backoff on errors. Once that resource
+    # version has expired (410 Gone) the current state is streamed afresh, followed by DELETED events for objects which
+    # disappeared in the meantime. Consumers hence see every change, but must tolerate repeated ADDED events.
+    #
+    # Exceptions raised by the block propagate to the caller rather than being mistaken for a broken connection, since
+    # resuming would replay the same event.
+    def watch(namespace: nil, &handler)
       path = namespace ? "#{@api}/namespaces/#{namespace}/#{@plural}" : "#{@api}/#{@plural}"
+      known_objects = {} # uid => latest object, to tell which objects disappeared while the watch was expired
+      resource_version = nil
+      retry_delay = 1
 
       loop do
-        Kubernetes.get(path, params) do |response|
-          raise Error, "Watch failed: #{response.code} #{response.message}" unless response.is_a?(Net::HTTPOK)
+        params = { watch: 1, allowWatchBookmarks: true, timeoutSeconds: WATCH_TIMEOUT.to_i }
+        if resource_version
+          params[:resourceVersion] = resource_version
+        else
+          params.merge!(sendInitialEvents: true, resourceVersionMatch: "NotOlderThan", resourceVersion: "")
+        end
+        # Uids of the objects streamed as the initial state, until the bookmark which marks its end
+        initial_object_uids = resource_version ? nil : []
+        status = nil
+        handler_failed = false
+        handle = lambda do |event|
+          handler.call(event)
+        rescue StandardError
+          handler_failed = true
+          raise
+        end
 
+        Kubernetes.get(path, params) do |response|
+          status = response.code
+          next unless response.is_a?(Net::HTTPOK)
+
+          retry_delay = 1
           buffer = +""
 
           response.read_body do |chunk|
             while (index = chunk.index("\n"))
               line = buffer + chunk.slice!(0, index)
               chunk.slice!(0) # remove the newline
+              buffer = +""
 
               event = JSON.parse(line)
+              object = event.fetch("object")
 
-              if event["type"] == "ERROR" && event.dig("object", "code") == 410
-                message = event.dig("object", "message")
-                # TODO: more graceful handling of expired watches, this approach is good enough for now
-                # since we don't have any important logic around DELETE events which can go missing here.
-                abort "ERROR: Watch expired: #{message}, aborting process to allow pod restart"
+              case event.fetch("type")
+              when "ERROR"
+                # The server ends the stream after an error, eg. 410 Gone once resource_version has expired
+                status = object.fetch("code").to_s
+              when "BOOKMARK"
+                if initial_object_uids.nil?
+                  resource_version = object.dig("metadata", "resourceVersion")
+                elsif object.dig("metadata", "annotations", "k8s.io/initial-events-end") == "true"
+                  resource_version = object.dig("metadata", "resourceVersion")
+                  (known_objects.keys - initial_object_uids).each do |uid|
+                    handle.call({ "type" => "DELETED", "object" => known_objects.delete(uid) })
+                  end
+                  initial_object_uids = nil
+                end
+              else
+                uid = object.dig("metadata", "uid")
+                if event["type"] == "DELETED"
+                  known_objects.delete(uid)
+                else
+                  known_objects[uid] = object
+                end
+                # The initial ADDED events aren't ordered by resource version, only the closing bookmark is a safe resume point
+                if initial_object_uids
+                  initial_object_uids << uid
+                else
+                  resource_version = object.dig("metadata", "resourceVersion")
+                end
+                handle.call(event)
               end
-
-              # Don't bother the caller with bookmark events, we only use them for resourceVersion updates
-              yield event unless event["type"] == "BOOKMARK"
-
-              new_resource_version = event.dig("object", "metadata", "resourceVersion")
-              params[:resourceVersion] = new_resource_version if new_resource_version
-
-              buffer = +""
             end
 
             buffer << chunk
           end
         end
-      rescue Error, *TRANSIENT_NET_ERRORS => e
-        LOGGER.error "class=Kubernetes::Resource message=watch-error error_class=#{e.class} error_message=#{e.message}"
-        Sentry.capture_exception(e)
-        sleep 5
-        retry
+
+        case status
+        when "200"
+          # The server ended the watch after timeoutSeconds, resume (or start over if the initial state was incomplete)
+        when "410"
+          LOGGER.info "class=Kubernetes::Resource message=watch-expired plural=#{@plural}, streaming the current state afresh"
+          resource_version = nil
+        when "429", /\A5/
+          LOGGER.warn "class=Kubernetes::Resource message=watch-failed plural=#{@plural} status=#{status} " \
+                      "retry_in=#{retry_delay}s"
+          sleep retry_delay
+          retry_delay = [retry_delay * 2, 30].min
+        else
+          raise Error, "Watch of #{@plural} failed with status #{status}"
+        end
+      rescue *TRANSIENT_NET_ERRORS => e
+        raise if handler_failed
+
+        LOGGER.warn "class=Kubernetes::Resource message=watch-interrupted plural=#{@plural} error_class=#{e.class} " \
+                    "error_message=#{e.message} retry_in=#{retry_delay}s"
+        sleep retry_delay
+        retry_delay = [retry_delay * 2, 30].min
       end
     end
   end
@@ -238,9 +313,9 @@ module Kubernetes
       path += "?#{URI.encode_www_form(params)}" unless params.empty?
       request = Net::HTTP::Get.new(path, @headers)
 
-      # watch requests need long timeouts to prevent timing out on empty resources
+      # Watch requests stay silent for long periods on quiet resources, but are ended by the server after WATCH_TIMEOUT
       initial_timeout = http.read_timeout
-      http.read_timeout = 1.year if block_given?
+      http.read_timeout = WATCH_TIMEOUT + 30.seconds if block_given?
 
       response = http.request(request, &)
 
@@ -444,7 +519,7 @@ module Kubernetes
           store.set_default_paths
 
           if (ca_file = cluster["certificate-authority"])
-            store.add_file(File.expand_path(ca_file, File.dirname(path)))
+            store.add_file(File.expand_path(ca_file, File.dirname(kubeconfig_path)))
           elsif (ca_data = cluster["certificate-authority-data"])
             cert_pem = Base64.decode64(ca_data)
             store.add_cert(OpenSSL::X509::Certificate.new(cert_pem))
@@ -459,14 +534,14 @@ module Kubernetes
             if user["client-certificate-data"]
               Base64.decode64(user["client-certificate-data"])
             else
-              File.read(File.expand_path(user["client-certificate"], File.dirname(path)))
+              File.read(File.expand_path(user["client-certificate"], File.dirname(kubeconfig_path)))
             end
 
           key_pem =
             if user["client-key-data"]
               Base64.decode64(user["client-key-data"])
             elsif user["client-key"]
-              File.read(File.expand_path(user["client-key"], File.dirname(path)))
+              File.read(File.expand_path(user["client-key"], File.dirname(kubeconfig_path)))
             end
 
           http.cert = OpenSSL::X509::Certificate.new(cert_pem) if cert_pem
