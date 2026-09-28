@@ -410,16 +410,10 @@ class OpensearchOperator
       heap_in_bytes = [memory_in_bytes / 2, 31.gigabytes].min
       heap_size = "#{heap_in_bytes / (1024 * 1024)}m"
 
-      existing_statefulset = Kubernetes.statefulsets.get(statefulset_name, namespace:)
-      # NOTE: Mistaking an API error for a missing StatefulSet would apply the spec replicas, scaling down without draining
-      if existing_statefulset["kind"] == "Status" && existing_statefulset["code"] != 404
-        raise Kubernetes::Error, "Get statefulsets/#{statefulset_name} in namespace #{namespace} failed: " \
-                                 "#{existing_statefulset['code']} #{existing_statefulset['message']}"
-      end
-
       # StatefulSets created before the switch to the OnDelete update strategy carry an API server defaulted
       # spec.updateStrategy.rollingUpdate.partition field which no field manager owns. Server side apply can't
       # remove it and the API server rejects OnDelete combined with rollingUpdate, so we merge patch it away first.
+      existing_statefulset = Kubernetes.statefulsets.get(statefulset_name, namespace:)
       if existing_statefulset.dig("spec", "updateStrategy", "type") == "RollingUpdate"
         LOGGER.info "Migrating StatefulSet #{namespace}/#{statefulset_name} to the OnDelete update strategy"
         Kubernetes.statefulsets.patch(
@@ -429,7 +423,8 @@ class OpensearchOperator
         )
       end
 
-      # RollingRestart owns the replicas of an existing StatefulSet since removing nodes requires draining them first
+      # RollingRestart owns the replicas of an existing StatefulSet since removing nodes requires draining them first.
+      # NOTE: The spec replicas only apply on a 404, Resource#get raises on any other API error.
       statefulset_replicas = existing_statefulset.dig("spec", "replicas") || replicas
 
       statefulset = Template["statefulset"].render(
