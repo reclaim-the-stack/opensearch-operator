@@ -423,6 +423,10 @@ class OpensearchOperator
         )
       end
 
+      # Scale ups apply right away but a scale down keeps the current replicas until RollingRestart has migrated the
+      # shards and cluster manager votes off the leaving nodes, it then lowers the StatefulSet replicas itself
+      statefulset_replicas = [replicas, existing_statefulset.dig("spec", "replicas")].compact.max
+
       statefulset = Template["statefulset"].render(
         disk_size:,
         has_repositories: repositories.any?,
@@ -432,7 +436,7 @@ class OpensearchOperator
         namespace:,
         node_selector:,
         owner_references:,
-        replicas:,
+        replicas: statefulset_replicas,
         repositories:,
         repository_secrets_path: "/tmp/repository_secrets",
         resources:,

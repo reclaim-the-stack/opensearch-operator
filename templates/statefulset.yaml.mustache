@@ -148,6 +148,7 @@ spec:
               {{/repositories}}
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Delete
+    # The operator only lowers replicas once the leaving nodes hold no shards (see RollingRestart)
     whenScaled: Delete
   volumeClaimTemplates:
     - metadata:
