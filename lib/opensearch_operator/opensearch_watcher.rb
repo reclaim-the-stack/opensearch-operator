@@ -46,14 +46,6 @@ class OpensearchOperator
       self
     end
 
-    def on_green(&block)
-      if @state[:status] == "green"
-        block.call
-      else
-        @on_green_callback = block
-      end
-    end
-
     # Called on every poll with the raw cluster health and _cat/nodes responses, regardless of state changes
     def on_poll(&block)
       @on_poll_callback = block
@@ -82,11 +74,6 @@ class OpensearchOperator
         changed_keys = new_state.keys.reject { |key| @state[key] == new_state[key] }
 
         # LOGGER.debug "class=OpensearchWatcher action=refresh-state url=#{@url} changed_keys=#{changed_keys.join(",")}"
-
-        if @on_green_callback && status == "green"
-          @on_green_callback.call
-          @on_green_callback = nil
-        end
 
         if changed_keys.any?
           @state = new_state

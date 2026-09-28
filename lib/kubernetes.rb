@@ -103,7 +103,7 @@ module Kubernetes
 
     def get!(name, namespace:)
       response = get(name, namespace:)
-      raise Error, "Resource #{@plural}/#{name} in namespace #{namespace} not found" if response["code"] == 404
+      raise Error, "Get #{@plural}/#{name} in namespace #{namespace} failed: #{response['code']} #{response['message']}" if response["kind"] == "Status"
 
       response
     end
@@ -119,6 +119,8 @@ module Kubernetes
 
       path = "#{@api}/namespaces/#{namespace}/#{@plural}"
       response = Kubernetes.post(path, params)
+      raise Error, "Create failed: #{response.code} #{response.body}" unless response.code.start_with?("2")
+
       JSON.parse(response.body)
     end
 
@@ -164,6 +166,8 @@ module Kubernetes
     def delete(name, namespace:)
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}"
       response = Kubernetes.delete(path)
+      raise Error, "Delete failed: #{response.code} #{response.body}" unless response.code.start_with?("2")
+
       JSON.parse(response.body)
     end
 

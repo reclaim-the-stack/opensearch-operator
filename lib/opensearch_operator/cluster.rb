@@ -69,19 +69,28 @@ class OpensearchOperator
     end
 
     def initialize_or_trigger_watcher
-      if @watcher
-        @watcher.on_green { upsert_snapshot_repositories }
-      else
-        # CLUSTER_HOST_OVERRIDE=localhost:9201 can be used for testing with port-forwarded clusters
-        host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}-client.#{namespace}.svc.cluster.local:9200"
-        cluster_url = "http://admin:#{admin_password}@#{host}"
-        @watcher = OpensearchWatcher.new(cluster_url)
-        @watcher.on_green { upsert_snapshot_repositories }
-        rolling_restart = RollingRestart.new(self, @watcher.client)
-        @watcher.on_poll { |health, nodes| rolling_restart.tick(health, nodes) }
-        @watcher.run do |new_state, changed_keys|
-          update_status(new_state, changed_keys)
+      # Snapshot repositories can only be registered once all pods run the latest StatefulSet revision (the S3
+      # client credentials live in the keystore of each node), hence we wait for a settled cluster before upserting.
+      @snapshot_repositories_pending = true
+
+      return if @watcher
+
+      # CLUSTER_HOST_OVERRIDE=localhost or localhost:9201 can be used for testing with port-forwarded clusters
+      host = ENV["CLUSTER_HOST_OVERRIDE"] || "opensearch-#{name}-client.#{namespace}.svc.cluster.local"
+      host += ":9200" unless host.include?(":")
+      cluster_url = "http://admin:#{admin_password}@#{host}"
+      @watcher = OpensearchWatcher.new(cluster_url)
+      rolling_restart = RollingRestart.new(self, @watcher.client)
+      @watcher.on_poll do |health, nodes|
+        settled = rolling_restart.tick(health, nodes)
+
+        if settled && @snapshot_repositories_pending
+          @snapshot_repositories_pending = false
+          upsert_snapshot_repositories
         end
+      end
+      @watcher.run do |new_state, changed_keys|
+        update_status(new_state, changed_keys)
       end
     end
 
@@ -159,7 +168,7 @@ class OpensearchOperator
       LOGGER.info "event=#{reason} type=#{type} cluster=#{namespace}/#{name} message=#{message}"
 
       timestamp = Time.now.utc.iso8601
-      response = Kubernetes.events.create(
+      Kubernetes.events.create(
         "metadata" => { "generateName" => "#{name}.", "namespace" => namespace },
         "involvedObject" => {
           "apiVersion" => @manifest.fetch("apiVersion"),
@@ -177,7 +186,6 @@ class OpensearchOperator
         "lastTimestamp" => timestamp,
         "count" => 1,
       )
-      raise Kubernetes::Error, "#{response['code']} #{response['message']}" if response["kind"] == "Status"
     rescue StandardError => e
       Sentry.capture_exception(e)
       LOGGER.error "Failed to emit event #{reason} for #{namespace}/#{name}: #{e.class}: #{e.message}"
