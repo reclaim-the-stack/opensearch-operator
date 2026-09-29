@@ -94,7 +94,13 @@ class OpensearchOperator
 
       case type
       when "ADDED", "MODIFIED"
-        reconcile(cluster_manifest)
+        # A resource with finalizers, eg. the foregroundDeletion one of Argo CD's cascading deletes, only gets a
+        # deletionTimestamp (and a new generation) until its owned resources are gone. Reconciling it would recreate them.
+        if cluster_manifest.dig("metadata", "deletionTimestamp")
+          finalize(cluster_manifest)
+        else
+          reconcile(cluster_manifest)
+        end
       when "DELETED"
         finalize(cluster_manifest)
       end
@@ -124,9 +130,11 @@ class OpensearchOperator
 
   def finalize(cluster_manifest)
     uid = cluster_manifest.fetch("metadata").fetch("uid")
-    # Not tracked when handling its events failed so far
-    @clusters.delete(uid)&.finalize
+    # Not tracked when handling its events failed so far, or once finalized when its deletion started
+    cluster = @clusters.delete(uid)
+    return unless cluster
 
+    cluster.finalize
     LOGGER.info "Finalized #{cluster_manifest.dig('metadata', 'namespace')}/#{cluster_manifest.dig('metadata', 'name')}"
   end
 
