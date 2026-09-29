@@ -30,7 +30,6 @@ explore.enabled: true
 
 # Known issues
 
-- Clusters outside the default namespace never form: discovery.seed_hosts is hardcoded to opensearch-<name>.default.svc.cluster.local (templates/_startup_script.sh.mustache)
 - New clusters never bootstrap if their pods start more than 5 minutes after the OpenSearch resource was created (the cluster.initial_cluster_manager_nodes heuristic in the startup script). Better: record bootstrap completion, eg. in a mounted ConfigMap, and only set it until then.
 - Every pod start downloads the prometheus exporter (from GitHub) and repository-s3 plugins, and exporter releases lag OpenSearch releases by days to months. Build an image with the plugins pre-installed instead.
 - Dashboards pods carry the cluster label used by the OpenSearch pod anti-affinity, so the two can't share a node, which can leave an OpenSearch pod Pending on small clusters. Add app.kubernetes.io/name: opensearch to the anti-affinity selector.
