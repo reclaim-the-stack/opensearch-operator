@@ -35,12 +35,11 @@ spec:
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
+            # The cluster label alone also matches the Dashboards pods
             - labelSelector:
-                matchExpressions:
-                  - key: opensearch.reclaim-the-stack.com/cluster
-                    operator: In
-                    values:
-                      - {{{name}}}
+                matchLabels:
+                  app.kubernetes.io/name: opensearch
+                  opensearch.reclaim-the-stack.com/cluster: {{{name}}}
               topologyKey: kubernetes.io/hostname
       nodeSelector: {{{node_selector}}}
       tolerations: {{{tolerations}}}
@@ -128,6 +127,14 @@ spec:
         - name: certificates
           secret:
             secretName: opensearch-{{{name}}}-certificates
+            # Keeps the admin and CA keys out of the pods
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: node.crt
+                path: node.crt
+              - key: node.key
+                path: node.key
         - name: security-config
           configMap:
             name: opensearch-{{{name}}}-security-config

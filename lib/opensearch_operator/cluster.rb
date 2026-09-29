@@ -9,7 +9,7 @@ require "yaml"
 class OpensearchOperator
   class Cluster
     # Bump when operator-managed manifests change and existing clusters must be reconciled again.
-    MANIFEST_VERSION = 2
+    MANIFEST_VERSION = 3
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
