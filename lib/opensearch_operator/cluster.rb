@@ -13,6 +13,11 @@ class OpensearchOperator
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
+    # Failed snapshot repository upserts are retried with a backoff rather than on every poll since their causes, eg. an
+    # unreachable S3 endpoint or a bucket which doesn't exist, tend to last a while
+    SNAPSHOT_REPOSITORIES_RETRY_INTERVAL = 5.minutes
+    SNAPSHOT_REPOSITORIES_MAX_RETRY_INTERVAL = 1.hour
+
     def initialize(manifest)
       @manifest = manifest
     end
@@ -73,7 +78,8 @@ class OpensearchOperator
     def initialize_or_trigger_watcher
       # Snapshot repositories can only be registered once all pods run the latest StatefulSet revision (the S3
       # client credentials live in the keystore of each node), hence we wait for a settled cluster before upserting.
-      @snapshot_repositories_pending = true
+      # Holds the time from which to upsert them, nil once they're in place.
+      @snapshot_repositories_upsert_due_at = Time.now
 
       return if @watcher
 
@@ -83,12 +89,42 @@ class OpensearchOperator
       cluster_url = "http://admin:#{admin_password}@#{host}"
       @watcher = OpensearchWatcher.new(cluster_url)
       rolling_restart = RollingRestart.new(self, @watcher.client)
+      # Consecutive failed snapshot repository upserts, a spec change retries right away but keeps counting
+      snapshot_repositories_failures = 0
       @watcher.on_poll do |health, nodes|
         settled = rolling_restart.tick(health, nodes)
 
-        if settled && @snapshot_repositories_pending
-          @snapshot_repositories_pending = false
-          upsert_snapshot_repositories
+        if settled && @snapshot_repositories_upsert_due_at&.past?
+          # Cleared up front so that a spec change arriving in the meantime triggers another upsert
+          @snapshot_repositories_upsert_due_at = nil
+          failed_repository_names = upsert_snapshot_repositories
+
+          if failed_repository_names.empty?
+            if snapshot_repositories_failures.positive?
+              emit_event(
+                "SnapshotRepositoriesRecovered",
+                "Upserted all snapshot repositories and policies after #{snapshot_repositories_failures} failed " \
+                "#{'attempt'.pluralize(snapshot_repositories_failures)}",
+              )
+            end
+            snapshot_repositories_failures = 0
+          else
+            snapshot_repositories_failures += 1
+            retry_interval = [
+              SNAPSHOT_REPOSITORIES_RETRY_INTERVAL * (2**(snapshot_repositories_failures - 1)),
+              SNAPSHOT_REPOSITORIES_MAX_RETRY_INTERVAL,
+            ].min
+            # Keeps the immediate upsert of a spec change which arrived in the meantime
+            @snapshot_repositories_upsert_due_at ||= retry_interval.from_now
+            # Emitted on every failure since Events expire after an hour by default, the backoff is capped at an hour
+            # so a Warning remains visible for as long as the failures last
+            emit_event(
+              "SnapshotRepositoriesFailed",
+              "Failed to upsert snapshot repositories #{failed_repository_names.join(', ')} (see the operator logs), " \
+              "retrying at #{@snapshot_repositories_upsert_due_at.utc.iso8601}",
+              type: "Warning",
+            )
+          end
         end
       end
       @watcher.run do |new_state, changed_keys|
@@ -100,11 +136,10 @@ class OpensearchOperator
       @watcher&.stop
     end
 
-    # Configures snapshot repositories and reconciles associated lifecycle policies in OpenSearch.
+    # Configures snapshot repositories and reconciles associated lifecycle policies in OpenSearch. Returns the names of
+    # the repositories which failed, a failing repository doesn't hold up the others.
     def upsert_snapshot_repositories
-      existing_policies = @watcher.client.http.get("/_plugins/_sm/policies").fetch("policies")
-
-      spec.fetch("snapshotRepositories").each do |repository|
+      spec.fetch("snapshotRepositories").filter_map do |repository|
         repository_name = repository.fetch("name")
 
         params = {
@@ -122,17 +157,17 @@ class OpensearchOperator
           },
         }
 
-        begin
-          @watcher.client.snapshot.create_repository(params)
-        rescue StandardError => e
-          Sentry.capture_exception(e)
-          LOGGER.error "Failed to upsert snapshot repository for cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
-          next
-        end
-
+        @watcher.client.snapshot.create_repository(params)
         LOGGER.info "Ensured snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
 
+        # The listing only returns 20 policies unless asked for more, the missing ones would be created again and conflict
+        existing_policies = @watcher.client.http.get("/_plugins/_sm/policies", params: { size: 1000 }).fetch("policies")
         reconcile_snapshot_policies(repository_name, repository.fetch("policies"), existing_policies)
+        nil
+      rescue StandardError => e
+        Sentry.capture_exception(e)
+        LOGGER.error "Failed to upsert snapshot repository #{repository_name} or its policies in cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
+        repository_name
       end
     end
 

@@ -35,7 +35,7 @@ explore.enabled: true
 - No drift repair: reconciliation is skipped once status.observedGeneration matches and owned resources aren't watched, so a deleted Service, ConfigMap, Secret or StatefulSet is never recreated.
 - Replica shard allocation stays disabled ("primaries") if a pod deleted by a rolling restart never comes back.
 - internal_users.yml and roles.yml only seed the security index on first boot, changes to them never reach existing clusters.
-- Snapshot management: failed repository registrations and policy updates aren't retried until the next spec change, removing a repository leaves its policies behind, and the policies listing isn't paginated (20 results).
+- Snapshot management: removing a repository leaves its policies behind, and changed S3 credentials in the referenced Secrets only reach the keystore once the pods restart, which nothing triggers.
 - Dashboards is upgraded right away while OpenSearch restarts one pod at a time, so it's unavailable during minor version upgrades.
 - No leader election: the Recreate strategy doesn't prevent two operator instances when a node's kubelet hangs.
 - spec.config keys which the operator sets itself (network.host, cluster.name, plugins.security.* etc) produce duplicate keys which stop OpenSearch from starting.
