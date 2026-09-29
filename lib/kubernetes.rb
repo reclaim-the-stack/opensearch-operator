@@ -60,29 +60,19 @@ module Kubernetes
   # Watches stream the current state again this often, which lets consumers retry events whose handling failed
   WATCH_RESYNC_INTERVAL = 10.minutes
 
-  # Returns the memory size in bytes
+  # Returns the memory size in bytes. The CRD only admits whole numbers of Mi or Gi.
   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#meaning-of-memory
   def self.parse_memory(memory_string)
     case memory_string
-    when /\A(\d+)(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K)?\z/
-      size = Integer(Regexp.last_match(1))
+    when /\A(\d+)(Mi|Gi)\z/
+      # Base 10 since Integer() takes a leading zero, eg. 08Gi, for an octal number
+      size = Integer(Regexp.last_match(1), 10)
       unit = Regexp.last_match(2)
 
       multiplier =
         case unit
-        when "Ei" then 1024**6
-        when "Pi" then 1024**5
-        when "Ti" then 1024**4
         when "Gi" then 1024**3
         when "Mi" then 1024**2
-        when "Ki" then 1024**1
-        when "E" then 1000**6
-        when "P" then 1000**5
-        when "T" then 1000**4
-        when "G" then 1000**3
-        when "M" then 1000**2
-        when "K" then 1000**1
-        else 1
         end
 
       size * multiplier
