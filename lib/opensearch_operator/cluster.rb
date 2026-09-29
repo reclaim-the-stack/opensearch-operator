@@ -32,15 +32,15 @@ class OpensearchOperator
     delegate :dig, to: :@manifest
 
     def update(new_manifest)
-      spec_changed = spec != new_manifest.fetch("spec")
-
       @manifest = new_manifest
+      generation = @manifest.fetch("metadata").fetch("generation")
 
-      if spec_changed
-        LOGGER.info "Spec changed for #{namespace}/#{name}, reconsiling"
-        reconsile
+      # A generation whose reconciliation failed gets retried by the next event of the cluster, eg. a watch resync
+      if generation == @reconciled_generation
+        LOGGER.info "Generation #{generation} of #{namespace}/#{name} already reconciled, skipping"
       else
-        LOGGER.info "No changes in spec for #{namespace}/#{name}, skipping"
+        LOGGER.info "Generation #{generation} of #{namespace}/#{name} not reconciled yet, reconsiling"
+        reconsile
       end
     end
 
@@ -52,6 +52,7 @@ class OpensearchOperator
       if observed_generation && observed_generation >= generation && observed_manifest_version == MANIFEST_VERSION
         LOGGER.info "Generation #{generation} and manifest version #{MANIFEST_VERSION} already observed for #{namespace}/#{name}, skipping reconciliation steps"
         initialize_or_trigger_watcher
+        @reconciled_generation = generation
         return
       end
 
@@ -66,6 +67,7 @@ class OpensearchOperator
 
       initialize_or_trigger_watcher
       record_observed_state(generation)
+      @reconciled_generation = generation
     end
 
     def initialize_or_trigger_watcher

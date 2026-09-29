@@ -20,7 +20,7 @@ require_relative "non_reentrant_connection_pool"
 #   Kubernetes.statefulsets.list(namespace: "default")
 #   Kubernetes.secrets.get("my-secret", namespace: "default")
 #   Kubernetes.services.create({ ... })
-#   Kubernetes.deploymnents.watch(namespace: "default", resource_version: "12345") do |event|
+#   Kubernetes.deployments.watch(namespace: "default") do |event|
 #     puts event
 #   end
 #
@@ -39,7 +39,10 @@ module Kubernetes
   TRANSIENT_NET_ERRORS = [
     EOFError,
     IOError,
+    Errno::ECONNREFUSED,
     Errno::ECONNRESET,
+    Errno::EHOSTUNREACH,
+    Errno::ENETUNREACH,
     Errno::EPIPE,
     Errno::ETIMEDOUT,
     Errno::EBADF,
@@ -48,6 +51,14 @@ module Kubernetes
     Net::WriteTimeout,
     Net::HTTPBadResponse,
   ].freeze
+
+  # Watch requests are ended by the server after this long (timeoutSeconds) and then resumed, which also bounds how long
+  # a connection that died without being closed can go unnoticed. Bookmarks can't serve that purpose as the API server
+  # doesn't guarantee sending any.
+  WATCH_TIMEOUT = 5.minutes
+
+  # Watches stream the current state again this often, which lets consumers retry events whose handling failed
+  WATCH_RESYNC_INTERVAL = 10.minutes
 
   # Returns the memory size in bytes
   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#meaning-of-memory
@@ -176,47 +187,146 @@ module Kubernetes
       JSON.parse(response.body)
     end
 
-    def watch(namespace: nil, resource_version: nil)
-      params = { watch: 1, resourceVersion: resource_version, allowWatchBookmarks: true }
+    # Yields the ADDED, MODIFIED and DELETED events of the collection until the process exits. The current state comes
+    # first, as ADDED events streamed by the watch itself, so no separate list request is needed:
+    # https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
+    #
+    # Interrupted watches resume from the last resource version, backing off exponentially unless the stream delivered
+    # events. Once that resource version has expired (410 Gone), and every WATCH_RESYNC_INTERVAL, the current state is
+    # streamed afresh and followed by DELETED events for objects which disappeared in the meantime. Those only carry the
+    # apiVersion, kind and the name, namespace and uid metadata. Consumers hence see every change, but must tolerate
+    # repeated ADDED events.
+    #
+    # Exceptions raised by the block propagate to the caller rather than being mistaken for a broken connection, since
+    # resuming would replay the same event.
+    def watch(namespace: nil, &handler)
       path = namespace ? "#{@api}/namespaces/#{namespace}/#{@plural}" : "#{@api}/#{@plural}"
+      # uid => what identifies the object, to tell which objects disappeared while the current state wasn't watched
+      known_objects = {}
+      remember = lambda do |object|
+        known_objects[object.dig("metadata", "uid")] = {
+          "apiVersion" => object["apiVersion"],
+          "kind" => object["kind"],
+          "metadata" => object.fetch("metadata").slice("name", "namespace", "uid"),
+        }
+      end
+      resource_version = nil
+      resynced_at = Time.now
+      retry_delay = 1
 
       loop do
-        Kubernetes.get(path, params) do |response|
-          raise Error, "Watch failed: #{response.code} #{response.message}" unless response.is_a?(Net::HTTPOK)
+        resource_version = nil if Time.now - resynced_at > WATCH_RESYNC_INTERVAL
 
-          buffer = +""
+        params = { watch: 1, allowWatchBookmarks: true, timeoutSeconds: WATCH_TIMEOUT.to_i }
+        if resource_version
+          params[:resourceVersion] = resource_version
+        else
+          params.merge!(sendInitialEvents: true, resourceVersionMatch: "NotOlderThan", resourceVersion: "")
+          resynced_at = Time.now
+        end
+        # The initial state is buffered until the bookmark which ends it and provides the resume point. Handling time counts
+        # towards timeoutSeconds, so handling the events as they arrive could end the watch before the resume point is known.
+        initial_events = resource_version ? nil : []
+        status = nil
+        status_message = nil
+        streamed = false
+        handler_failed = false
+        handle = lambda do |event|
+          handler.call(event)
+        rescue StandardError
+          handler_failed = true
+          raise
+        end
 
-          response.read_body do |chunk|
-            while (index = chunk.index("\n"))
-              line = buffer + chunk.slice!(0, index)
-              chunk.slice!(0) # remove the newline
-
-              event = JSON.parse(line)
-
-              if event["type"] == "ERROR" && event.dig("object", "code") == 410
-                message = event.dig("object", "message")
-                # TODO: more graceful handling of expired watches, this approach is good enough for now
-                # since we don't have any important logic around DELETE events which can go missing here.
-                abort "ERROR: Watch expired: #{message}, aborting process to allow pod restart"
-              end
-
-              # Don't bother the caller with bookmark events, we only use them for resourceVersion updates
-              yield event unless event["type"] == "BOOKMARK"
-
-              new_resource_version = event.dig("object", "metadata", "resourceVersion")
-              params[:resourceVersion] = new_resource_version if new_resource_version
-
-              buffer = +""
+        begin
+          Kubernetes.get(path, params) do |response|
+            status = response.code
+            unless response.is_a?(Net::HTTPOK)
+              status_message = response.body
+              next
             end
 
-            buffer << chunk
+            buffer = +""
+
+            response.read_body do |chunk|
+              while (index = chunk.index("\n"))
+                line = buffer + chunk.slice!(0, index)
+                chunk.slice!(0) # remove the newline
+                buffer = +""
+
+                event = JSON.parse(line)
+                type = event.fetch("type")
+                object = event.fetch("object")
+
+                if type == "ERROR"
+                  # The server ends the stream after an error, eg. 410 Gone once resource_version has expired
+                  status = object.fetch("code").to_s
+                  status_message = object["message"]
+                  next
+                end
+                streamed = true
+
+                if type == "BOOKMARK"
+                  initial_events_end = object.dig("metadata", "annotations", "k8s.io/initial-events-end") == "true"
+                  # While the initial state is streamed only the bookmark which ends it is a resume point
+                  next if initial_events && !initial_events_end
+
+                  resource_version = object.dig("metadata", "resourceVersion")
+                  next unless initial_events
+
+                  initial_uids = initial_events.map { |initial_event| initial_event.dig("object", "metadata", "uid") }
+                  vanished_uids = known_objects.keys - initial_uids
+                  initial_events.each do |initial_event|
+                    remember.call(initial_event.fetch("object"))
+                    handle.call(initial_event)
+                  end
+                  vanished_uids.each { |uid| handle.call({ "type" => "DELETED", "object" => known_objects.delete(uid) }) }
+                  initial_events = nil
+                elsif initial_events
+                  # The initial ADDED events aren't ordered by resource version, so they can't serve as resume points
+                  initial_events << event
+                else
+                  if type == "DELETED"
+                    known_objects.delete(object.dig("metadata", "uid"))
+                  else
+                    remember.call(object)
+                  end
+                  resource_version = object.dig("metadata", "resourceVersion")
+                  handle.call(event)
+                end
+              end
+
+              buffer << chunk
+            end
           end
+
+          case status
+          when "200"
+            # The server ended the watch after timeoutSeconds, resume (or start over if the initial state was incomplete)
+          when "410"
+            LOGGER.info "class=Kubernetes::Resource message=watch-expired plural=#{@plural}, streaming the current state afresh"
+            resource_version = nil
+          when "429", /\A5/
+            LOGGER.warn "class=Kubernetes::Resource message=watch-failed plural=#{@plural} status=#{status} " \
+                        "status_message=#{status_message}"
+          else
+            raise Error, "Watch of #{@plural} failed with status #{status}: #{status_message}"
+          end
+        rescue *TRANSIENT_NET_ERRORS => e
+          raise if handler_failed
+
+          LOGGER.warn "class=Kubernetes::Resource message=watch-interrupted plural=#{@plural} error_class=#{e.class} " \
+                      "error_message=#{e.message}"
         end
-      rescue Error, *TRANSIENT_NET_ERRORS => e
-        LOGGER.error "class=Kubernetes::Resource message=watch-error error_class=#{e.class} error_message=#{e.message}"
-        Sentry.capture_exception(e)
-        sleep 5
-        retry
+
+        # Only a stream which delivered events proves the connection healthy, eg. an API server shutting down might accept
+        # watches only to end them right away
+        if streamed
+          retry_delay = 1
+        else
+          sleep retry_delay
+          retry_delay = [retry_delay * 2, 30].min
+        end
       end
     end
   end
@@ -229,18 +339,25 @@ module Kubernetes
       "Content-Type" => "application/json",
     }.freeze
 
-    def initialize(http:, token:)
+    def initialize(http:, token: nil, token_path: nil)
       @http = http
-      @headers = token ? DEFAULT_HEADERS.merge("Authorization" => "Bearer #{token}") : DEFAULT_HEADERS
+      @token = token
+      @token_path = token_path
+    end
+
+    # A token_path is read for every request since the kubelet rotates projected service account tokens
+    def headers
+      token = @token_path ? File.read(@token_path).strip : @token
+      token ? DEFAULT_HEADERS.merge("Authorization" => "Bearer #{token}") : DEFAULT_HEADERS
     end
 
     def get(path, params = {}, &)
       path += "?#{URI.encode_www_form(params)}" unless params.empty?
-      request = Net::HTTP::Get.new(path, @headers)
+      request = Net::HTTP::Get.new(path, headers)
 
-      # watch requests need long timeouts to prevent timing out on empty resources
+      # Watch requests stay silent for long periods on quiet resources, but are ended by the server after WATCH_TIMEOUT
       initial_timeout = http.read_timeout
-      http.read_timeout = 1.year if block_given?
+      http.read_timeout = WATCH_TIMEOUT + 30.seconds if block_given?
 
       response = http.request(request, &)
 
@@ -250,30 +367,28 @@ module Kubernetes
     end
 
     def post(path, params = {})
-      request = Net::HTTP::Post.new(path, @headers)
+      request = Net::HTTP::Post.new(path, headers)
       request.body = params.to_json unless params.empty?
 
       http.request(request)
     end
 
     def apply_patch(path, params = {})
-      headers = @headers.merge("Content-Type" => "application/apply-patch+yaml")
-      request = Net::HTTP::Patch.new(path, headers)
+      request = Net::HTTP::Patch.new(path, headers.merge("Content-Type" => "application/apply-patch+yaml"))
       request.body = params.to_json unless params.empty?
 
       http.request(request)
     end
 
     def merge_patch(path, params = {})
-      headers = @headers.merge("Content-Type" => "application/merge-patch+json")
-      request = Net::HTTP::Patch.new(path, headers)
+      request = Net::HTTP::Patch.new(path, headers.merge("Content-Type" => "application/merge-patch+json"))
       request.body = params.to_json unless params.empty?
 
       http.request(request)
     end
 
     def put(path, params = {})
-      request = Net::HTTP::Put.new(path, @headers)
+      request = Net::HTTP::Put.new(path, headers)
       request.body = params.to_json unless params.empty?
 
       http.request(request)
@@ -281,7 +396,7 @@ module Kubernetes
 
     def delete(path, params = {})
       path += "?#{URI.encode_www_form(params)}" unless params.empty?
-      request = Net::HTTP::Delete.new(path, @headers)
+      request = Net::HTTP::Delete.new(path, headers)
       http.request(request)
     end
 
@@ -397,8 +512,6 @@ module Kubernetes
       token_path = File.join(service_account_path, "token")
       ca_path = File.join(service_account_path, "ca.crt")
 
-      token = File.read(token_path).strip if File.file?(token_path)
-
       http = Net::HTTP.new(host, port)
       configure_timeouts(http)
       http.use_ssl = true
@@ -406,7 +519,7 @@ module Kubernetes
       http.ca_file = ca_path if File.file?(ca_path)
       http.start
 
-      Connection.new(http:, token:)
+      Connection.new(http:, token_path: (token_path if File.file?(token_path)))
     end
 
     # Out-of-cluster (KUBECONFIG)
@@ -444,7 +557,7 @@ module Kubernetes
           store.set_default_paths
 
           if (ca_file = cluster["certificate-authority"])
-            store.add_file(File.expand_path(ca_file, File.dirname(path)))
+            store.add_file(File.expand_path(ca_file, File.dirname(kubeconfig_path)))
           elsif (ca_data = cluster["certificate-authority-data"])
             cert_pem = Base64.decode64(ca_data)
             store.add_cert(OpenSSL::X509::Certificate.new(cert_pem))
@@ -459,14 +572,14 @@ module Kubernetes
             if user["client-certificate-data"]
               Base64.decode64(user["client-certificate-data"])
             else
-              File.read(File.expand_path(user["client-certificate"], File.dirname(path)))
+              File.read(File.expand_path(user["client-certificate"], File.dirname(kubeconfig_path)))
             end
 
           key_pem =
             if user["client-key-data"]
               Base64.decode64(user["client-key-data"])
             elsif user["client-key"]
-              File.read(File.expand_path(user["client-key"], File.dirname(path)))
+              File.read(File.expand_path(user["client-key"], File.dirname(kubeconfig_path)))
             end
 
           http.cert = OpenSSL::X509::Certificate.new(cert_pem) if cert_pem

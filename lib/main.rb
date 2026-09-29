@@ -78,23 +78,15 @@ class OpensearchOperator
 
   def run
     setup_signal_traps
-    # Initial list to get current resourceVersion
-    clusters_response = CLUSTERS_RESOURCE.list
+    LOGGER.info "class=OpensearchOperator action=watching"
 
-    initial_clusters = clusters_response.fetch("items")
-
-    initial_clusters.each do |cluster|
-      reconcile(cluster)
-    end
-
-    resource_version = clusters_response.dig("metadata", "resourceVersion")
-    LOGGER.info "class=OpensearchOperator action=watching resource_version=#{resource_version}"
-
-    CLUSTERS_RESOURCE.watch(resource_version:) do |event|
+    # The existing clusters arrive as ADDED events before any changes
+    CLUSTERS_RESOURCE.watch do |event|
       break if @stopping
 
       type = event.fetch("type")
       cluster_manifest = event.fetch("object")
+      namespace = cluster_manifest.dig("metadata", "namespace")
       name = cluster_manifest.dig("metadata", "name")
       resource_version = cluster_manifest.dig("metadata", "resourceVersion")
 
@@ -105,11 +97,12 @@ class OpensearchOperator
         reconcile(cluster_manifest)
       when "DELETED"
         finalize(cluster_manifest)
-      when "ERROR"
-        message = "Watch ERROR event: #{event}"
-        LOGGER.error message
-        raise message
       end
+    rescue StandardError => e
+      # One failing cluster must neither take down the operator nor stall the events of the other clusters. Its events
+      # are handled again on the next change or watch resync (see Kubernetes::WATCH_RESYNC_INTERVAL).
+      Sentry.capture_exception(e)
+      LOGGER.error "Failed to handle #{type} event for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
   end
 
@@ -131,11 +124,10 @@ class OpensearchOperator
 
   def finalize(cluster_manifest)
     uid = cluster_manifest.fetch("metadata").fetch("uid")
-    cluster = @clusters.delete(uid)
+    # Not tracked when handling its events failed so far
+    @clusters.delete(uid)&.finalize
 
-    cluster&.finalize
-
-    LOGGER.info "Finalized #{cluster.namespace}/#{cluster.name}"
+    LOGGER.info "Finalized #{cluster_manifest.dig('metadata', 'namespace')}/#{cluster_manifest.dig('metadata', 'name')}"
   end
 
   def setup_signal_traps
