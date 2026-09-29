@@ -41,7 +41,7 @@ explore.enabled: true
 - spec.config keys which the operator sets itself (network.host, cluster.name, plugins.security.* etc) produce duplicate keys which stop OpenSearch from starting.
 - No pod securityContext.fsGroup, fine with hostpath volumes but likely to fail with block storage CSI drivers.
 - Authentication failures are reported as Unreachable health.
-- The operator Deployment has no resource requests or probes and logs at debug level.
+- The operator Deployment has no probes.
 - `kubectl delete -k deploy/` also deletes the CRD, and with it every cluster and its data.
 
 # Maybe?
