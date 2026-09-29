@@ -36,7 +36,6 @@ explore.enabled: true
 - Replica shard allocation stays disabled ("primaries") if a pod deleted by a rolling restart never comes back.
 - internal_users.yml and roles.yml only seed the security index on first boot, changes to them never reach existing clusters.
 - Snapshot management: failed repository registrations and policy updates aren't retried until the next spec change, removing a repository leaves its policies behind, and the policies listing isn't paginated (20 results).
-- The ServiceMonitor scrapes every pod twice since the headless and client services share their labels.
 - Dashboards is upgraded right away while OpenSearch restarts one pod at a time, so it's unavailable during minor version upgrades.
 - No leader election: the Recreate strategy doesn't prevent two operator instances when a node's kubelet hangs.
 - spec.config keys which the operator sets itself (network.host, cluster.name, plugins.security.* etc) produce duplicate keys which stop OpenSearch from starting.

@@ -6,6 +6,8 @@ metadata:
 spec:
   namespaceSelector:
     any: true
+  # Only matches the headless service of each cluster, the client service lacks the app.kubernetes.io/name label
+  # (see README)
   selector:
     matchLabels:
       app.kubernetes.io/managed-by: opensearch-operator
