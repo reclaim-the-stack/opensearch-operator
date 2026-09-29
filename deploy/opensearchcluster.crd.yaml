@@ -66,8 +66,8 @@ spec:
                       properties:
                         memory:
                           type: string
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
+                          description: Whole number of Mi or Gi (e.g., 8Gi), at least 4Gi. The JVM heap gets half of it, up to 31Gi.
+                          pattern: ^[0-9]+(Mi|Gi)$
                       x-kubernetes-validations:
                         - message: spec.resources.limits.memory must be at least 4Gi
                           rule: quantity(self.memory).compareTo(quantity('4Gi')) >= 0
@@ -79,8 +79,8 @@ spec:
                       properties:
                         memory:
                           type: string
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
+                          description: Whole number of Mi or Gi (e.g., 8Gi), at least 4Gi.
+                          pattern: ^[0-9]+(Mi|Gi)$
                       x-kubernetes-validations:
                         - message: spec.resources.requests.memory must be at least 4Gi
                           rule: quantity(self.memory).compareTo(quantity('4Gi')) >= 0
