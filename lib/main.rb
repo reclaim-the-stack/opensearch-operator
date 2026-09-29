@@ -94,7 +94,13 @@ class OpensearchOperator
 
       case type
       when "ADDED", "MODIFIED"
-        reconcile(cluster_manifest)
+        # A resource with finalizers, eg. the foregroundDeletion one of Argo CD's cascading deletes, only gets a
+        # deletionTimestamp (and a new generation) until its owned resources are gone. Reconciling it would recreate them.
+        if cluster_manifest.dig("metadata", "deletionTimestamp")
+          finalize(cluster_manifest, deletion_started: true)
+        else
+          reconcile(cluster_manifest)
+        end
       when "DELETED"
         finalize(cluster_manifest)
       end
@@ -122,12 +128,22 @@ class OpensearchOperator
     end
   end
 
-  def finalize(cluster_manifest)
+  def finalize(cluster_manifest, deletion_started: false)
     uid = cluster_manifest.fetch("metadata").fetch("uid")
-    # Not tracked when handling its events failed so far
-    @clusters.delete(uid)&.finalize
+    # Not tracked when handling its events failed so far, or once finalized when its deletion started
+    cluster = @clusters.delete(uid)
+    return unless cluster
 
-    LOGGER.info "Finalized #{cluster_manifest.dig('metadata', 'namespace')}/#{cluster_manifest.dig('metadata', 'name')}"
+    cluster.finalize
+    namespaced_name = "#{cluster_manifest.dig('metadata', 'namespace')}/#{cluster_manifest.dig('metadata', 'name')}"
+    if deletion_started
+      # Shows why the cluster is no longer managed while finalizers hold up its deletion. Unlike creating an Event,
+      # updating the status works in a terminating namespace.
+      cluster.update_phase("Deleting")
+      LOGGER.info "Stopped managing #{namespaced_name}, its deletion has started"
+    else
+      LOGGER.info "Finalized #{namespaced_name}"
+    end
   end
 
   def setup_signal_traps

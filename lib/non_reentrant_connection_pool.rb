@@ -26,10 +26,16 @@ class NonReentrantConnectionPool
     raise ArgumentError, "SimpleConnectionPool#with requires a block" unless block_given?
 
     conn = checkout
+    completed = false
     begin
-      yield conn
+      result = yield conn
+      completed = true
+      result
     ensure
-      if @discarded.delete?(conn) || connection_broken?(conn)
+      discarded = @discarded.delete?(conn)
+      # A block which didn't complete, eg. its thread got killed or it broke out of a streamed response, can leave an
+      # unread response on the connection which the next request would take for its own
+      if !completed || discarded || connection_broken?(conn)
         safely_close(conn)
       else
         @available.push(conn)
