@@ -5,9 +5,10 @@ kind: Service
 metadata:
   name: opensearch-%{name}-client
   namespace: %{namespace}
+  # NOTE: Unlike the headless service no app.kubernetes.io/name label, otherwise the ServiceMonitor (see README) would
+  # scrape every pod a second time through this service
   labels:
     app.kubernetes.io/managed-by: opensearch-operator
-    app.kubernetes.io/name: opensearch
     opensearch.reclaim-the-stack.com/cluster: %{name}
   ownerReferences: %{owner_references}
 spec:
