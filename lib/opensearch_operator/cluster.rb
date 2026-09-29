@@ -13,6 +13,10 @@ class OpensearchOperator
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
+    # Failed snapshot repository upserts are retried after a delay rather than on every poll since their causes, eg. an
+    # unreachable S3 endpoint or rejected credentials, tend to last a while
+    SNAPSHOT_REPOSITORIES_RETRY_INTERVAL = 5.minutes
+
     def initialize(manifest)
       @manifest = manifest
     end
@@ -73,7 +77,8 @@ class OpensearchOperator
     def initialize_or_trigger_watcher
       # Snapshot repositories can only be registered once all pods run the latest StatefulSet revision (the S3
       # client credentials live in the keystore of each node), hence we wait for a settled cluster before upserting.
-      @snapshot_repositories_pending = true
+      # Holds the time from which to upsert them, nil once they're in place.
+      @snapshot_repositories_upsert_due_at = Time.now
 
       return if @watcher
 
@@ -86,9 +91,13 @@ class OpensearchOperator
       @watcher.on_poll do |health, nodes|
         settled = rolling_restart.tick(health, nodes)
 
-        if settled && @snapshot_repositories_pending
-          @snapshot_repositories_pending = false
-          upsert_snapshot_repositories
+        if settled && @snapshot_repositories_upsert_due_at&.past?
+          # Cleared up front so that a spec change arriving in the meantime triggers another upsert
+          @snapshot_repositories_upsert_due_at = nil
+          unless upsert_snapshot_repositories
+            @snapshot_repositories_upsert_due_at = SNAPSHOT_REPOSITORIES_RETRY_INTERVAL.from_now
+            LOGGER.info "Retrying the snapshot repositories of #{namespace}/#{name} at #{@snapshot_repositories_upsert_due_at.utc.iso8601}"
+          end
         end
       end
       @watcher.run do |new_state, changed_keys|
@@ -100,11 +109,10 @@ class OpensearchOperator
       @watcher&.stop
     end
 
-    # Configures snapshot repositories and reconciles associated lifecycle policies in OpenSearch.
+    # Configures snapshot repositories and reconciles associated lifecycle policies in OpenSearch. Returns whether all of
+    # them are in place, a failing repository doesn't hold up the others.
     def upsert_snapshot_repositories
-      existing_policies = @watcher.client.http.get("/_plugins/_sm/policies").fetch("policies")
-
-      spec.fetch("snapshotRepositories").each do |repository|
+      spec.fetch("snapshotRepositories").map do |repository|
         repository_name = repository.fetch("name")
 
         params = {
@@ -122,18 +130,17 @@ class OpensearchOperator
           },
         }
 
-        begin
-          @watcher.client.snapshot.create_repository(params)
-        rescue StandardError => e
-          Sentry.capture_exception(e)
-          LOGGER.error "Failed to upsert snapshot repository for cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
-          next
-        end
-
+        @watcher.client.snapshot.create_repository(params)
         LOGGER.info "Ensured snapshot repository #{repository_name} in cluster #{namespace}/#{name}"
 
+        existing_policies = @watcher.client.http.get("/_plugins/_sm/policies").fetch("policies")
         reconcile_snapshot_policies(repository_name, repository.fetch("policies"), existing_policies)
-      end
+        true
+      rescue StandardError => e
+        Sentry.capture_exception(e)
+        LOGGER.error "Failed to upsert snapshot repository #{repository_name} or its policies in cluster #{namespace}/#{name}: #{e.class}: #{e.message}"
+        false
+      end.all?
     end
 
     # TODO: Maybe we should label which pod is master / manager?
