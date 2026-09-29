@@ -9,7 +9,7 @@ require "yaml"
 class OpensearchOperator
   class Cluster
     # Bump when operator-managed manifests change and existing clusters must be reconciled again.
-    MANIFEST_VERSION = 2
+    MANIFEST_VERSION = 3
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
@@ -401,6 +401,7 @@ class OpensearchOperator
         config_yaml_string:,
         has_repositories: repositories.any?,
         name:,
+        namespace:,
         prometheus_exporter_version:,
         repositories:,
       ).to_json
