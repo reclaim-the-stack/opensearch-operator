@@ -1,5 +1,3 @@
-- Adding new repositories + policies to existing clusters: verify that the health gated rolling restart now restarts all pods and that the snapshot policy gets created once the cluster is green again.
-
 - Support major version upgrades
 
 The StatefulSet already uses updateStrategy: OnDelete with the operator restarting pods one by one (see RollingRestart), non-manager pods first:
