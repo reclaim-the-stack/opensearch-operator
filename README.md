@@ -124,6 +124,8 @@ Now add the new manifest file to the resources list in `platform/kube-prometheus
 
 You should now get metrics from your OpenSearch clusters into Prometheus. Add the `examples/opensearch-grafana-dashboard.json` dashboard into Grafana to view the metrics.
 
+The selector only matches the headless service of each cluster, which includes pods that aren't ready, so every pod is scraped once. The client service deliberately lacks the `app.kubernetes.io/name` label: a selector which also matches it, eg. `opensearch.reclaim-the-stack.com/cluster` alone, would scrape every pod twice.
+
 ## Development
 
 Prerequisites: Ruby 3.4.5
