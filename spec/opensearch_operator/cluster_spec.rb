@@ -3,7 +3,7 @@
 RSpec.describe OpensearchOperator::Cluster do
   subject(:cluster) { OpensearchOperator::Cluster.new(manifest) }
 
-  let(:manifest) { YAML.load_file("spec/fixtures/example-cluster-manifest.yaml") }
+  let(:manifest) { cluster_manifest }
 
   describe "#name" do
     it "returns the name from metadata" do
@@ -75,11 +75,9 @@ RSpec.describe OpensearchOperator::Cluster do
 
     snapshots.each do |snapshot, variant|
       it "match spec/fixtures/manifests/#{snapshot}.yaml" do
-        manifest = cluster_manifest(**variant.except(:namespace))
-        manifest["metadata"]["namespace"] = variant.fetch(:namespace, "default")
         fake_kubernetes
         fake_watcher
-        OpensearchOperator::Cluster.new(manifest).reconsile
+        OpensearchOperator::Cluster.new(cluster_manifest(**variant)).reconsile
 
         # Secrets and ConfigMaps are left out, they hold generated passwords and certificates
         documents = fake_kubernetes.applied.values_at(:services, :statefulsets, :deployments).flatten
@@ -91,8 +89,11 @@ RSpec.describe OpensearchOperator::Cluster do
     end
   end
 
-  describe "#ensure_statefulset" do
-    before { fake_kubernetes }
+  describe "the applied StatefulSet" do
+    before do
+      fake_kubernetes
+      fake_watcher
+    end
 
     def applied_statefulset = fake_kubernetes.applied[:statefulsets].last
 
@@ -101,10 +102,10 @@ RSpec.describe OpensearchOperator::Cluster do
     end
 
     it "uses the spec's replicas and disk size for a new StatefulSet" do
-      OpensearchOperator::Cluster.new(cluster_manifest(replicas: 3, diskSize: "20Gi")).send(:ensure_statefulset)
+      cluster.reconsile
 
       expect(applied_statefulset.dig("spec", "replicas")).to eq 3
-      expect(applied_disk_size).to eq "20Gi"
+      expect(applied_disk_size).to eq "5Gi"
     end
 
     it "keeps the replicas and the disk size of an existing StatefulSet, which the rolling restart and the volumes own" do
@@ -116,7 +117,7 @@ RSpec.describe OpensearchOperator::Cluster do
         },
       }
 
-      OpensearchOperator::Cluster.new(cluster_manifest(replicas: 3, diskSize: "20Gi")).send(:ensure_statefulset)
+      cluster.reconsile
 
       expect(applied_statefulset.dig("spec", "replicas")).to eq 5
       expect(applied_disk_size).to eq "10Gi"
@@ -125,13 +126,13 @@ RSpec.describe OpensearchOperator::Cluster do
     it "applies nothing when the existing StatefulSet can't be read" do
       allow(fake_kubernetes.statefulsets).to receive(:get).and_raise(Kubernetes::Error, "Get opensearch-example failed: 503")
 
-      expect { cluster.send(:ensure_statefulset) }.to raise_error(Kubernetes::Error, /503/)
+      expect { cluster.reconsile }.to raise_error(Kubernetes::Error, /503/)
       expect(fake_kubernetes.applied[:statefulsets]).to be_empty
     end
 
     it "sizes the heap at half the memory limit" do
-      resources = { "limits" => { "memory" => "4608Mi" }, "requests" => { "memory" => "4608Mi" } }
-      OpensearchOperator::Cluster.new(cluster_manifest(resources:)).send(:ensure_statefulset)
+      manifest["spec"]["resources"] = { "limits" => { "memory" => "4608Mi" }, "requests" => { "memory" => "4608Mi" } }
+      cluster.reconsile
 
       environment = applied_statefulset.dig("spec", "template", "spec", "containers", 0, "env")
       expect(environment).to include("name" => "OPENSEARCH_JAVA_OPTS", "value" => "-Xms2304m -Xmx2304m")
@@ -141,8 +142,8 @@ RSpec.describe OpensearchOperator::Cluster do
   describe "snapshot repositories" do
     let(:snapshot) do
       Class.new do
-        attr_reader :created
-        attr_accessor :failures, :on_create
+        attr_reader :created, :failures
+        attr_accessor :on_create
 
         def initialize
           @created = []
@@ -151,7 +152,7 @@ RSpec.describe OpensearchOperator::Cluster do
 
         def create_repository(params)
           name = params.fetch(:repository)
-          on_create&.call(name)
+          on_create&.call
           if failures[name].positive?
             failures[name] -= 1
             raise OpenSearch::Transport::Transport::Errors::InternalServerError, "[500] verification failed for #{name}"
@@ -181,45 +182,49 @@ RSpec.describe OpensearchOperator::Cluster do
         end
 
         def post(path, **) = @requests << [:post, path]
-        def put(path, **) = @requests << [:put, path]
-        def delete(path, **) = @requests << [:delete, path]
       end.new
     end
     let(:repository_names) { %w[primary] }
-    let(:cluster) do
+    let(:manifest) do
       policies = [{ "name" => "daily", "schedule" => "0 3 * * *", "max_age" => "7d" }]
       repositories = repository_names.map { |name| { "name" => name, "bucket" => "bucket-#{name}", "policies" => policies } }
-      OpensearchOperator::Cluster.new(cluster_manifest(snapshotRepositories: repositories))
+      cluster_manifest(snapshotRepositories: repositories)
     end
     let(:watcher) { fake_watcher(client: Struct.new(:snapshot, :http).new(snapshot, http)) }
+    let(:rolling_restart) { instance_double(OpensearchOperator::RollingRestart, tick: true) }
 
     before do
       fake_kubernetes
       watcher
-      @rolling_restart_settled = true
-      allow(Sentry).to receive(:capture_exception)
+      allow(OpensearchOperator::RollingRestart).to receive(:new).and_return(rolling_restart)
       travel_to Time.utc(2026, 9, 30, 12)
       cluster.initialize_or_trigger_watcher
       travel 1.second # the upsert is due once its time has passed
     end
 
-    def upsert_due_at = cluster.instance_variable_get(:@snapshot_repositories_upsert_due_at)
-    def due_in = (upsert_due_at - Time.now).round
     def created_policies = http.requests.select { |request| request.first == :post }.map(&:last)
 
+    # However long the cluster keeps polling, nothing gets upserted any more
+    def expect_no_pending_upsert
+      expect do
+        travel described_class::SNAPSHOT_REPOSITORIES_MAX_RETRY_INTERVAL + 1.second
+        watcher.poll
+      end.not_to(change { [snapshot.created.size, http.requests.size] })
+    end
+
     def change_spec_during_the_next_upsert
-      snapshot.on_create = lambda do |_name|
+      snapshot.on_create = lambda do
         snapshot.on_create = nil
         cluster.initialize_or_trigger_watcher
       end
     end
 
     it "only upserts once the rolling restart reports a settled cluster" do
-      @rolling_restart_settled = false
+      allow(rolling_restart).to receive(:tick).and_return(false)
       watcher.poll
       expect(snapshot.created).to be_empty
 
-      @rolling_restart_settled = true
+      allow(rolling_restart).to receive(:tick).and_return(true)
       watcher.poll
       expect(snapshot.created).to eq ["primary"]
       expect(created_policies).to eq ["/_plugins/_sm/policies/primary-daily"]
@@ -235,23 +240,22 @@ RSpec.describe OpensearchOperator::Cluster do
         watcher.poll
         expect(snapshot.created).to eq ["secondary"]
         expect(created_policies).to eq ["/_plugins/_sm/policies/secondary-daily"]
-        expect(due_in).to eq described_class::SNAPSHOT_REPOSITORIES_RETRY_INTERVAL.to_i
         expect(fake_kubernetes.events.last).to include("reason" => "SnapshotRepositoriesFailed", "type" => "Warning")
         expect(fake_kubernetes.events.last["message"])
           .to eq "Failed to upsert snapshot repositories primary (see the operator logs), retrying at 2026-09-30T12:05:01Z"
 
-        travel 10.seconds
+        travel described_class::SNAPSHOT_REPOSITORIES_RETRY_INTERVAL - 1.second
         watcher.poll
         expect(snapshot.created).to eq ["secondary"]
 
-        travel described_class::SNAPSHOT_REPOSITORIES_RETRY_INTERVAL
+        travel 2.seconds
         watcher.poll
         expect(snapshot.created).to eq %w[secondary primary secondary]
-        expect(upsert_due_at).to be_nil
         expect(fake_kubernetes.events.last).to include(
           "reason" => "SnapshotRepositoriesRecovered",
           "message" => "Upserted all snapshot repositories and policies after 1 failed attempt",
         )
+        expect_no_pending_upsert
       end
     end
 
@@ -259,8 +263,9 @@ RSpec.describe OpensearchOperator::Cluster do
       snapshot.failures["primary"] = 100
       delays = Array.new(7) do
         watcher.poll
-        delay = due_in
-        travel_to upsert_due_at + 1.second
+        retrying_at = Time.iso8601(fake_kubernetes.events.last.fetch("message")[/retrying at (\S+)\z/, 1])
+        delay = retrying_at - Time.now
+        travel_to retrying_at + 1.second
         delay
       end
 
@@ -271,30 +276,28 @@ RSpec.describe OpensearchOperator::Cluster do
     it "retries a failing policies listing like a failing repository" do
       http.listing_failures = 1
       watcher.poll
-      expect(upsert_due_at).not_to be_nil
+      expect(fake_kubernetes.events.last).to include("reason" => "SnapshotRepositoriesFailed")
 
       travel described_class::SNAPSHOT_REPOSITORIES_RETRY_INTERVAL + 1.second
       watcher.poll
       expect(created_policies).to eq ["/_plugins/_sm/policies/primary-daily"]
-      expect(upsert_due_at).to be_nil
+      expect_no_pending_upsert
     end
 
     it "upserts again when the spec changes in the middle of an upsert" do
       change_spec_during_the_next_upsert
       watcher.poll
-      expect(upsert_due_at).to eq Time.now
 
       travel 10.seconds
       watcher.poll
       expect(snapshot.created).to eq %w[primary primary]
-      expect(upsert_due_at).to be_nil
+      expect_no_pending_upsert
     end
 
     it "keeps the immediate upsert of a spec change which arrives during a failing upsert" do
       snapshot.failures["primary"] = 1
       change_spec_during_the_next_upsert
       watcher.poll
-      expect(upsert_due_at).to eq Time.now
 
       travel 10.seconds
       watcher.poll
@@ -304,11 +307,12 @@ RSpec.describe OpensearchOperator::Cluster do
     it "upserts right away after a spec change during the retry delay" do
       snapshot.failures["primary"] = 1
       watcher.poll
-      expect(upsert_due_at).to be > Time.now
+      travel 10.seconds
+      watcher.poll
+      expect(snapshot.created).to be_empty
 
-      travel 10.seconds
       cluster.initialize_or_trigger_watcher
-      travel 10.seconds
+      travel 1.second
       watcher.poll
       expect(snapshot.created).to eq ["primary"]
     end
@@ -319,7 +323,6 @@ RSpec.describe OpensearchOperator::Cluster do
       it "makes no requests" do
         watcher.poll
 
-        expect(upsert_due_at).to be_nil
         expect(http.requests).to be_empty
         expect(fake_kubernetes.events).to be_empty
       end
@@ -327,8 +330,6 @@ RSpec.describe OpensearchOperator::Cluster do
   end
 
   describe "status conditions" do
-    let(:cluster) { OpensearchOperator::Cluster.new(cluster_manifest) }
-
     before do
       fake_kubernetes
       fake_watcher
@@ -458,21 +459,19 @@ RSpec.describe OpensearchOperator::Cluster do
       end
 
       context "when reconciling a generation fails" do
-        let(:failure) { "Kubernetes::Error: Apply failed: 422 volumeClaimTemplates is immutable" }
-
-        before do
-          fake_kubernetes.statefulset_apply_error = "Apply failed: 422 volumeClaimTemplates is immutable"
-          @patches_before = fake_kubernetes.status_patches.size
-        end
+        before { fake_kubernetes.statefulset_apply_error = "Apply failed: 422 volumeClaimTemplates is immutable" }
 
         it "raises for the watch handler to log, publishing the failure in the conditions and a Warning event" do
+          failure = "Kubernetes::Error: Apply failed: 422 volumeClaimTemplates is immutable"
+          patches_before = fake_kubernetes.status_patches.size
+
           expect { cluster.update(cluster_manifest(generation: 2)) }
             .to raise_error(Kubernetes::Error, /volumeClaimTemplates is immutable/)
 
           expect(condition("Reconciled").values_at("status", "reason", "observedGeneration", "message"))
             .to eq ["False", "ReconcileFailed", 2, failure]
           expect(summary("Ready")).to eq ["False", "ReconcileFailed", 2]
-          expect(fake_kubernetes.status_patches.drop(@patches_before).map(&:keys)).to eq [["conditions"]]
+          expect(fake_kubernetes.status_patches.drop(patches_before).map(&:keys)).to eq [["conditions"]]
           expect(fake_kubernetes.events).to eq [
             { "reason" => "ReconcileFailed", "type" => "Warning", "message" => "Failed to reconcile generation 2: #{failure}" },
           ]
@@ -524,9 +523,9 @@ RSpec.describe OpensearchOperator::Cluster do
           common.merge("type" => "Ready", "reason" => "Running", "message" => "Cluster health is green"),
         ]
       end
-      let(:cluster) do
+      let(:manifest) do
         status = { "observedGeneration" => 3, "operatorManifestVersion" => described_class::MANIFEST_VERSION }
-        OpensearchOperator::Cluster.new(cluster_manifest(generation: 3, status: status.merge("conditions" => published)))
+        cluster_manifest(generation: 3, status: status.merge("conditions" => published))
       end
 
       it "publishes nothing while the conditions are unchanged" do

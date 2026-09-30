@@ -6,10 +6,9 @@
 class SimulatedEnvironment
   EXCLUDE_SETTING = "cluster.routing.allocation.exclude._name"
 
-  attr_accessor :statefulset_replicas, :generation, :observed_generation, :update_revision, :pods, :persistent, :transient,
-    :shards, :voting_exclusions, :status, :calls, :unassigned_primaries, :new_pods_pending, :on_voting_exclusion,
-    :stuck_terminating
-  attr_reader :violations
+  attr_accessor :update_revision, :status, :unassigned_primaries, :new_pods_pending, :on_voting_exclusion, :voting_exclusions
+  attr_reader :statefulset_replicas, :generation, :observed_generation, :pods, :persistent, :transient, :shards, :calls,
+    :stuck_terminating, :violations
 
   def initialize(replicas:, shards_per_node: 4)
     @statefulset_replicas = replicas
@@ -31,11 +30,12 @@ class SimulatedEnvironment
 
   def pod_name_for(ordinal) = "opensearch-demo-#{ordinal}"
 
-  def new_pod(ordinal, revision, ready: true, joined: true)
+  # A pending pod never got scheduled, so it's neither ready nor part of the cluster
+  def new_pod(ordinal, revision, pending: false)
     {
       "metadata" => { "name" => pod_name_for(ordinal), "labels" => { "controller-revision-hash" => revision } },
-      "status" => { "conditions" => [{ "type" => "Ready", "status" => ready ? "True" : "False" }] },
-      "joined" => joined, # simulation only: whether the pod's OpenSearch node is part of the cluster
+      "status" => { "conditions" => [{ "type" => "Ready", "status" => pending ? "False" : "True" }] },
+      "joined" => !pending, # simulation only: whether the pod's OpenSearch node is part of the cluster
     }
   end
 
@@ -92,7 +92,7 @@ class SimulatedEnvironment
   def advance
     @pods.reject! { |pod| pod.dig("metadata", "deletionTimestamp") && !@stuck_terminating.include?(ordinal(pod_name(pod))) }
     # Restarted pods recover their shards from their volume, removed pods (ordinals beyond the replicas) lose them
-    @shards.select! { |name, _| @pods.any? { |pod| pod_name(pod) == name } || ordinal(name) < @statefulset_replicas }
+    @shards.select! { |name, _| pod(ordinal(name)) || ordinal(name) < @statefulset_replicas }
 
     if @observed_generation != @generation
       @observed_generation = @generation
@@ -103,7 +103,7 @@ class SimulatedEnvironment
     (0...@statefulset_replicas).each do |ordinal|
       next if pod(ordinal)
 
-      @pods << new_pod(ordinal, @update_revision, ready: !@new_pods_pending, joined: !@new_pods_pending)
+      @pods << new_pod(ordinal, @update_revision, pending: @new_pods_pending)
       @shards[pod_name_for(ordinal)] ||= 0
     end
 
@@ -145,7 +145,7 @@ class SimulatedEnvironment
       pods.define_singleton_method(:list) { |namespace:, params:| { "items" => environment.pods } }
       pods.define_singleton_method(:delete) do |name, namespace:|
         environment.calls << "DELETE pod #{name}"
-        environment.pods.find { |pod| pod.dig("metadata", "name") == name }["metadata"]["deletionTimestamp"] = "now"
+        environment.pod(environment.ordinal(name))["metadata"]["deletionTimestamp"] = "now"
       end
     end
   end
@@ -177,17 +177,15 @@ class SimulatedEnvironment
     end
     indices = Object.new
     indices.define_singleton_method(:flush) { environment.calls << "POST _flush" }
-    client = Object.new
-    client.define_singleton_method(:cluster) { cluster }
-    client.define_singleton_method(:indices) { indices }
-    client
+    Struct.new(:cluster, :indices).new(cluster, indices)
   end
 end
 
 # The parts of a Cluster which RollingRestart uses, recording its events and phases
 class SimulatedCluster
-  attr_accessor :replicas, :evaluated_statefulset_generation
-  attr_reader :events, :phases
+  attr_accessor :replicas
+  attr_writer :evaluated_statefulset_generation
+  attr_reader :phases
 
   def initialize(replicas)
     @replicas = replicas

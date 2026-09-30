@@ -235,12 +235,12 @@ RSpec.describe Kubernetes::Resource do
 
     context "with a TLS server which drops connections without a close_notify, like a stopping API server", :real_network do
       let(:tls_server) do
-        key = OpenSSL::PKey::RSA.new(2048)
+        key = OpenSSL::PKey::EC.generate("prime256v1")
         certificate = OpenSSL::X509::Certificate.new
         certificate.version = 2
         certificate.serial = 1
         certificate.subject = certificate.issuer = OpenSSL::X509::Name.parse("/CN=127.0.0.1")
-        certificate.public_key = key.public_key
+        certificate.public_key = key
         certificate.not_before = Time.now - 60
         certificate.not_after = Time.now + 3600
         certificate.sign(key, OpenSSL::Digest.new("SHA256"))
@@ -267,7 +267,6 @@ RSpec.describe Kubernetes::Resource do
               chunks.map(&event_line).each { |data| socket.write "#{data.bytesize.to_s(16)}\r\n#{data}\r\n" }
               socket.flush
               if paths.size == 1
-                sleep 0.2
                 socket.io.close # without the TLS close_notify
               else
                 sleep 5

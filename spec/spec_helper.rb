@@ -22,6 +22,11 @@ RSpec.configure do |config|
     c.syntax = :expect
   end
 
+  # Stubs of methods which don't exist, or calls with arguments the real methods don't take, fail
+  config.mock_with :rspec do |mocks|
+    mocks.verify_partial_doubles = true
+  end
+
   config.include ActiveSupport::Testing::TimeHelpers
   config.after { travel_back }
 

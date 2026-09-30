@@ -78,9 +78,11 @@ class FakeKubernetes
     {}
   end
 
-  # The conditions of the latest status patch which carried them
-  def conditions = @status_patches.reverse.find { |status| status.key?("conditions") }&.fetch("conditions")
-  def condition(type) = conditions.to_a.find { |condition| condition["type"] == type }
+  # The condition of the given type in the latest status patch which carried conditions
+  def condition(type)
+    conditions = @status_patches.filter_map { |status| status["conditions"] }.last
+    conditions.to_a.find { |condition| condition["type"] == type }
+  end
 end
 
 module FakeKubernetesHelpers

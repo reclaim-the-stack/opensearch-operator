@@ -1,0 +1,5 @@
+inherit_from: ../.rubocop.yml
+
+# The fakes keep the keyword arguments of the methods they stand in for, so wrong calls fail like real ones
+Lint/UnusedBlockArgument:
+  AllowUnusedKeywordArguments: true

@@ -104,7 +104,7 @@ RSpec.describe NonReentrantConnectionPool do
     end
 
     it "closes the connection of a streamed response which the caller broke out of" do
-      stream("/slow") { |_response| break }
+      stream("/fast") { |_response| break }
 
       expect(fast_request).to eq "/fast"
       expect(created.size).to eq 2

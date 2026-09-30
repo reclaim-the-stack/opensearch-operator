@@ -98,7 +98,6 @@ RSpec.describe OpensearchOperator do
     before do
       fake_kubernetes.statefulset_apply_error = "Apply failed: 500 etcdserver: request timed out"
       fake_watcher
-      allow(Sentry).to receive(:capture_exception)
       travel_to Time.utc(2026, 9, 30, 12)
       run(added)
     end
