@@ -22,13 +22,14 @@ class FakeKubernetes
     end
   end
 
-  attr_reader :applied, :events, :status_patches
+  attr_reader :applied, :events, :status_patches, :statefulset_patches
   attr_accessor :existing_statefulset, :statefulset_generation, :statefulset_apply_error, :status_patch_error
 
   def initialize
     @applied = Hash.new { |hash, kind| hash[kind] = [] }
     @events = []
     @status_patches = []
+    @statefulset_patches = []
     @existing_statefulset = { "code" => 404 }
     @statefulset_generation = 1
   end
@@ -52,6 +53,7 @@ class FakeKubernetes
       :statefulsets,
       @applied,
       get: ->(_name, namespace:) { fake.existing_statefulset },
+      patch: ->(_name, namespace:, subresource: nil, params: {}) { fake.statefulset_patches << params },
       # Like the API server, answers with the StatefulSet's generation
       apply: lambda do |manifest|
         fake.applied[:statefulsets] << manifest

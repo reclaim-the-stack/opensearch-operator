@@ -121,6 +121,17 @@ RSpec.describe OpensearchOperator::Cluster do
 
       expect(applied_statefulset.dig("spec", "replicas")).to eq 5
       expect(applied_disk_size).to eq "10Gi"
+      expect(fake_kubernetes.statefulset_patches).to be_empty
+    end
+
+    it "moves an existing StatefulSet off the RollingUpdate strategy first, since apply can't remove its partition" do
+      update_strategy = { "type" => "RollingUpdate", "rollingUpdate" => { "partition" => 0 } }
+      fake_kubernetes.existing_statefulset = { "spec" => { "replicas" => 3, "updateStrategy" => update_strategy } }
+
+      cluster.reconsile
+
+      expect(fake_kubernetes.statefulset_patches).to eq [{ spec: { updateStrategy: { type: "OnDelete", rollingUpdate: nil } } }]
+      expect(applied_statefulset.dig("spec", "updateStrategy")).to eq("type" => "OnDelete")
     end
 
     it "applies nothing when the existing StatefulSet can't be read" do

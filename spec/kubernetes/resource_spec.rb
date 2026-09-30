@@ -251,15 +251,17 @@ RSpec.describe Kubernetes::Resource do
       end
       let(:paths) { [] }
       let(:sentry_levels) { [] }
+      let(:server_threads) { [] }
 
       before do
         server = tls_server
         paths = self.paths
+        server_threads = self.server_threads
         event_line = ->(event) { "#{event.to_json}\n" }
         events = [added("a", "1"), initial_events_end("1"), modified("a", "2")]
-        @server_thread = Thread.new do
+        server_threads << Thread.new do
           loop do
-            Thread.new(server.accept) do |socket|
+            server_threads << Thread.new(server.accept) do |socket|
               paths << socket.gets.split[1]
               nil while (line = socket.gets) && line != "\r\n"
               socket.write "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -269,7 +271,7 @@ RSpec.describe Kubernetes::Resource do
               if paths.size == 1
                 socket.io.close # without the TLS close_notify
               else
-                sleep 5
+                sleep # keeps the connection open until the after hook stops the server
               end
             rescue StandardError
               nil
@@ -289,7 +291,7 @@ RSpec.describe Kubernetes::Resource do
       end
 
       after do
-        @server_thread.kill
+        server_threads.each(&:kill)
         tls_server.close
       end
 

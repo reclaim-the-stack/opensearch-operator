@@ -51,13 +51,15 @@ RSpec.describe NonReentrantConnectionPool do
     end
 
     let(:slow_requests_received) { Queue.new }
+    let(:server_threads) { [] }
 
     before do
       server = self.server
       slow_requests_received = self.slow_requests_received
-      @server_thread = Thread.new do
+      server_threads = self.server_threads
+      server_threads << Thread.new do
         loop do
-          Thread.new(server.accept) do |socket|
+          server_threads << Thread.new(server.accept) do |socket|
             while (request_line = socket.gets)
               path = request_line.split[1]
               nil while (line = socket.gets) && line != "\r\n"
@@ -79,7 +81,7 @@ RSpec.describe NonReentrantConnectionPool do
     end
 
     after do
-      @server_thread.kill
+      server_threads.each(&:kill)
       server.close
     end
 
