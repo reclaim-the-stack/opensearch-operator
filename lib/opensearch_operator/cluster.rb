@@ -13,6 +13,10 @@ class OpensearchOperator
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
+    # A failed generation is retried at most this often. Events which don't change the generation, like the status update
+    # reporting the failure, would otherwise retry it right away.
+    RECONCILE_RETRY_INTERVAL = 1.minute
+
     # Failed snapshot repository upserts are retried with a backoff rather than on every poll since their causes, eg. an
     # unreachable S3 endpoint or a bucket which doesn't exist, tend to last a while
     SNAPSHOT_REPOSITORIES_RETRY_INTERVAL = 5.minutes
@@ -45,6 +49,9 @@ class OpensearchOperator
       # A generation whose reconciliation failed gets retried by the next event of the cluster, eg. a watch resync
       if generation == @reconciled_generation
         LOGGER.info "Generation #{generation} of #{namespace}/#{name} already reconciled, skipping"
+      elsif @reconcile_failure&.fetch(:generation) == generation &&
+            Time.now - @reconcile_failure.fetch(:failed_at) < RECONCILE_RETRY_INTERVAL
+        LOGGER.info "Generation #{generation} of #{namespace}/#{name} failed to reconcile recently, retrying later"
       else
         LOGGER.info "Generation #{generation} of #{namespace}/#{name} not reconciled yet, reconsiling"
         reconsile
@@ -80,11 +87,13 @@ class OpensearchOperator
       patch_status(observedGeneration: generation, operatorManifestVersion: MANIFEST_VERSION)
     rescue StandardError => e
       message = "#{e.class}: #{e.message}".truncate(1000)
-      # Retries of the generation fail the same way, one event per distinct failure keeps them from flooding the events
-      unless @reconcile_failure == { generation:, message: }
+      # Retries of the generation fail the same way, one event per distinct failure keeps them from flooding the events.
+      # Compared to the published condition, which also holds across operator restarts.
+      published = published_conditions.find { |condition| condition["type"] == "Reconciled" }
+      unless published&.values_at("status", "observedGeneration", "message") == ["False", generation, message]
         emit_event("ReconcileFailed", "Failed to reconcile generation #{generation}: #{message}", type: "Warning")
       end
-      @reconcile_failure = { generation:, message: }
+      @reconcile_failure = { generation:, message:, failed_at: Time.now }
       patch_status
       raise
     end
@@ -190,6 +199,14 @@ class OpensearchOperator
       return unless changed_keys.intersect?(KEYS_AFFECTING_STATUS)
 
       patch_status(health: new_state[:status]&.capitalize, nodes: new_state[:number_of_nodes], version: new_state[:version])
+    end
+
+    # Set by each tick of the rolling restart to the StatefulSet generation it works with. Ready waits for it to reach the
+    # generation the latest reconciliation applied (see #conditions).
+    def evaluated_statefulset_generation=(generation)
+      # The phase of an earlier generation doesn't tell whether the new one needs a rolling restart or scaling
+      @phase = nil if generation != @evaluated_statefulset_generation
+      @evaluated_statefulset_generation = generation
     end
 
     # Sets status.phase (visible in `kubectl get opensearch`), skipping the API call when unchanged
@@ -486,7 +503,7 @@ class OpensearchOperator
         version:,
       )
 
-      Kubernetes.statefulsets.apply(statefulset)
+      @applied_statefulset_generation = Kubernetes.statefulsets.apply(statefulset).dig("metadata", "generation")
     end
 
     def ensure_dashboards_deployment
@@ -570,6 +587,9 @@ class OpensearchOperator
           ["False", "Unreachable", "The OpenSearch REST API isn't reachable"]
         elsif health == "red"
           ["False", "HealthRed", "Cluster health is red"]
+        elsif @evaluated_statefulset_generation.to_i < @applied_statefulset_generation.to_i
+          # A Running phase can predate the applied StatefulSet, eg. from a tick which read it before the apply
+          ["False", "Progressing", "Applying generation #{generation}"]
         elsif phase != "Running"
           ["False", "Progressing", phase]
         else

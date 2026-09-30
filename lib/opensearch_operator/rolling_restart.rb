@@ -64,6 +64,8 @@ class OpensearchOperator
       # The StatefulSet controller hasn't processed the latest spec yet, updateRevision could be stale
       return false if statefulset.dig("status", "observedGeneration") != statefulset.dig("metadata", "generation")
 
+      @cluster.evaluated_statefulset_generation = statefulset.dig("metadata", "generation")
+
       replicas = statefulset.dig("spec", "replicas")
       # Read once since the spec can change mid tick, the replicas we scale down to must match the nodes we drained
       desired_replicas = @cluster.replicas

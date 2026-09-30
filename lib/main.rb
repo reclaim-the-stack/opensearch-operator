@@ -122,15 +122,16 @@ class OpensearchOperator
     if existing_cluster
       existing_cluster.update(cluster_manifest)
     else
+      # Tracked before reconciling, so that retries of a failing first reconciliation keep its failure (see Cluster#update)
       cluster = Cluster.new(cluster_manifest)
-      cluster.reconsile
       @clusters[cluster.uid] = cluster
+      cluster.reconsile
     end
   end
 
   def finalize(cluster_manifest, deletion_started: false)
     uid = cluster_manifest.fetch("metadata").fetch("uid")
-    # Not tracked when handling its events failed so far, or once finalized when its deletion started
+    # Not tracked once finalized when its deletion started
     cluster = @clusters.delete(uid)
     return unless cluster
 

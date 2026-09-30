@@ -86,7 +86,7 @@ The operator manages `cluster.routing.allocation.exclude._name` and the voting c
 
 `kubectl get opensearch` shows the version, health and number of nodes of each cluster, whether it's ready, and its phase, eg. the progress of a rolling restart. `kubectl describe opensearch <name>` also shows two conditions with their messages:
 
-- `Reconciled` tells whether the latest generation of the spec was applied, with the error if it wasn't. Failed reconciliations are retried on the next change of the resource and every 10 minutes.
+- `Reconciled` tells whether the latest generation of the spec was applied, with the error if it wasn't. Failed reconciliations are retried on the next change of the spec and every 10 minutes.
 - `Ready` is `True` once the latest generation was applied, the cluster is reachable, its health isn't red and no rolling restart or scaling is in progress. Otherwise its reason is `ReconcileFailed`, `Unreachable`, `HealthRed`, `Progressing` or `Deleting`.
 
 `kubectl wait --for=condition=Ready opensearch/<name> --timeout=15m` waits for a cluster to be ready, eg. after creating it.
