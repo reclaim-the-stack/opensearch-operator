@@ -464,9 +464,13 @@ class OpensearchOperator
       # RollingRestart owns the replicas of an existing StatefulSet since removing nodes requires draining them first.
       # NOTE: The spec replicas only apply on a 404, Resource#get raises on any other API error.
       statefulset_replicas = existing_statefulset.dig("spec", "replicas") || replicas
+      # Volume claim templates are immutable, so an existing StatefulSet keeps its disk size. The CRD rejects diskSize
+      # changes, but a CR changed before that rule existed would otherwise fail every reconciliation.
+      statefulset_disk_size =
+        existing_statefulset.dig("spec", "volumeClaimTemplates", 0, "spec", "resources", "requests", "storage") || disk_size
 
       statefulset = Template["statefulset"].render(
-        disk_size:,
+        disk_size: statefulset_disk_size,
         has_repositories: repositories.any?,
         heap_size:,
         image:,

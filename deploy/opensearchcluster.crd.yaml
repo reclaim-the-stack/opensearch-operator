@@ -50,11 +50,11 @@ spec:
                   default: 3
                 diskSize:
                   type: string
-                  description: Size of each node's data volume (e.g., 100Gi). Can't be changed later since the volume claim templates of a StatefulSet are immutable. Hostpath storage (e.g., openebs-hostpath) doesn't enforce it, OpenSearch then sees the whole filesystem of its node.
-                  pattern: ^[0-9]+(Mi|Gi|Ti)$
+                  description: Size of each node's data volume as a whole number of M, G, T or P, or Mi, Gi, Ti or Pi (e.g., 100Gi). Can't be changed later since the volume claim templates of a StatefulSet are immutable. Hostpath storage (e.g., openebs-hostpath) doesn't enforce it, OpenSearch then sees the whole filesystem of its node.
+                  pattern: ^[1-9][0-9]*[MGTP]i?$
                   x-kubernetes-validations:
                     - message: spec.diskSize can't be changed since the volume claim templates of a StatefulSet are immutable
-                      rule: self == oldSelf
+                      rule: quantity(self).compareTo(quantity(oldSelf)) == 0
                 resources:
                   description: |-
                     Regular Kubernetes resource requests and limits for OpenSearch nodes.
