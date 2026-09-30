@@ -36,6 +36,13 @@ module Kubernetes
   mattr_accessor :field_manager
   self.field_manager = "kubernetes-rb"
 
+  # OpenSSL 3 reports a connection closed mid stream without a TLS close_notify, eg. by an API server shutting down or a
+  # load balancer dropping it, as an SSLError rather than an EOFError. Other SSLErrors aren't retried, like failing
+  # certificate verification or the same EOF during the handshake, which a proxy rejecting every connection also causes.
+  SSL_READ_UNEXPECTED_EOF = Module.new do
+    def self.===(error) = error.is_a?(OpenSSL::SSL::SSLError) && error.message.start_with?("SSL_read: unexpected eof")
+  end
+
   TRANSIENT_NET_ERRORS = [
     EOFError,
     IOError,
@@ -50,6 +57,7 @@ module Kubernetes
     Net::ReadTimeout,
     Net::WriteTimeout,
     Net::HTTPBadResponse,
+    SSL_READ_UNEXPECTED_EOF,
   ].freeze
 
   # Watch requests are ended by the server after this long (timeoutSeconds) and then resumed, which also bounds how long
@@ -478,7 +486,11 @@ module Kubernetes
         LOGGER.debug "class=Kubernetes method=#{method.upcase} path=#{path}"
         connection.send(method, path, params, &)
       rescue *STANDARD_ERROR_AND_MAYBE_IRB_ABORT => e
-        transient = TRANSIENT_NET_ERRORS.any? { |error_class| e.is_a?(error_class) }
+        transient =
+          case e
+          when *TRANSIENT_NET_ERRORS then true
+          else false
+          end
         Sentry.capture_exception(e, level: transient ? :warning : :error)
         connection_pool.discard(connection)
         raise
