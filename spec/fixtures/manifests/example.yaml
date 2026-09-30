@@ -1,0 +1,343 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-example
+  namespace: default
+  labels:
+    app.kubernetes.io/managed-by: opensearch-operator
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: example
+  ownerReferences:
+  - apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+    kind: OpenSearch
+    name: example
+    uid: 123e4567-e89b-12d3-a456-426614174000
+    controller: true
+    blockOwnerDeletion: true
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: http
+    port: 9200
+    targetPort: 9200
+  - name: transport
+    port: 9300
+    targetPort: 9300
+  - name: metrics
+    port: 9600
+    targetPort: 9600
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: example
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-example-client
+  namespace: default
+  labels:
+    app.kubernetes.io/managed-by: opensearch-operator
+    opensearch.reclaim-the-stack.com/cluster: example
+  ownerReferences:
+  - apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+    kind: OpenSearch
+    name: example
+    uid: 123e4567-e89b-12d3-a456-426614174000
+    controller: true
+    blockOwnerDeletion: true
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 9200
+    targetPort: 9200
+  selector:
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: example
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-dashboards-example
+  namespace: default
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+    opensearch.reclaim-the-stack.com/cluster: example
+  ownerReferences:
+  - apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+    kind: OpenSearch
+    name: example
+    uid: 123e4567-e89b-12d3-a456-426614174000
+    controller: true
+    blockOwnerDeletion: true
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 5601
+    targetPort: 5601
+  selector:
+    app.kubernetes.io/name: opensearch-dashboards
+    opensearch.reclaim-the-stack.com/cluster: example
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch-example
+  namespace: default
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: opensearch-example
+    app.kubernetes.io/version: 3.1.0
+    app.kubernetes.io/part-of: example
+    app.kubernetes.io/managed-by: opensearch-operator
+    opensearch.reclaim-the-stack.com/cluster: example
+  ownerReferences:
+  - apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+    kind: OpenSearch
+    name: example
+    uid: 123e4567-e89b-12d3-a456-426614174000
+    controller: true
+    blockOwnerDeletion: true
+spec:
+  serviceName: opensearch-example
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: OnDelete
+  replicas: 3
+  selector:
+    matchLabels:
+      opensearch.reclaim-the-stack.com/cluster: example
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/instance: opensearch-example
+        app.kubernetes.io/version: 3.1.0
+        app.kubernetes.io/part-of: example
+        app.kubernetes.io/managed-by: opensearch-operator
+        opensearch.reclaim-the-stack.com/cluster: example
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: opensearch
+                opensearch.reclaim-the-stack.com/cluster: example
+            topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        node-role.kubernetes.io/database: ''
+      tolerations:
+      - key: role
+        value: database
+        effect: NoSchedule
+      containers:
+      - name: opensearch
+        image: opensearchproject/opensearch:3.1.0
+        command:
+        - bash
+        - "-e"
+        - "-c"
+        - |
+          # Simplest possible way to guesstimate if we need to set cluster.initial_cluster_manager_nodes or not
+          # If the cluster is being created now (within the last 5 minutes), we set it
+          # If the cluster was created more than 5 minutes ago, we assume it's already formed
+          CLUSTER_CREATED_TIMESTAMP=1756728000
+          CURRENT_TIMESTAMP=$(date +%s)
+          if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
+            echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
+            INITIAL_CLUSTER_MANAGER_NODES='"opensearch-example-0"'
+          else
+            echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
+          fi
+
+          # Seed hosts via the headless service
+          SEED_HOSTS='"opensearch-example.default.svc.cluster.local"'
+
+          # append to config/opensearch.yml
+          echo "network.host: 0.0.0.0" > config/opensearch.yml
+          echo "cluster.name: example" >> config/opensearch.yml
+          echo "node.name: $HOSTNAME" >> config/opensearch.yml
+          echo "discovery.seed_hosts: [$SEED_HOSTS]" >> config/opensearch.yml
+          if [ -n "$INITIAL_CLUSTER_MANAGER_NODES" ]; then
+            echo "cluster.initial_cluster_manager_nodes: [$INITIAL_CLUSTER_MANAGER_NODES]" >> config/opensearch.yml
+          fi
+
+          cat >> config/opensearch.yml <<'YAML'
+          plugins.security.ssl.transport.pemcert_filepath: certs/node.crt
+          plugins.security.ssl.transport.pemkey_filepath: certs/node.key
+          plugins.security.ssl.transport.pemtrustedcas_filepath: certs/ca.crt
+          plugins.security.ssl.transport.enforce_hostname_verification: false
+          plugins.security.ssl.transport.resolve_hostname: false
+
+          plugins.security.ssl.http.enabled: false
+
+          plugins.security.authcz.admin_dn:
+            - CN=admin
+
+          plugins.security.nodes_dn:
+            - CN=opensearch-node
+
+          plugins.security.allow_default_init_securityindex: true
+
+          # Disable index-level metrics to avoid high-cardinality labels in Prometheus
+          prometheus.indices: false
+          YAML
+
+          opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/3.1.0.0/prometheus-exporter-3.1.0.0.zip
+
+          # If attempting to boot the Performance Analyzer CLI with default config, it just crashes at boot with:
+          # Error: Could not find or load main class org.opensearch.performanceanalyzer.PerformanceAnalyzerApp
+          #
+          # It's also annoying to deploy since it has to be started as a separate process and can use up to 1GB of
+          # memory based tmpfs disk at /dev/shm. Performance Analyzer is currently scheduled for deprecation so lets
+          # focus on the prometheus metrics based approach instead for now:
+          # https://github.com/opensearch-project/performance-analyzer/issues/585
+          opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
+
+
+
+
+          echo "Starting OpenSearch with config:"
+          cat config/opensearch.yml
+
+          exec ./opensearch-docker-entrypoint.sh opensearch
+        ports:
+        - name: http
+          containerPort: 9200
+        - name: transport
+          containerPort: 9300
+        - name: metrics
+          containerPort: 9600
+        env:
+        - name: OPENSEARCH_JAVA_OPTS
+          value: "-Xms2048m -Xmx2048m"
+        - name: METRICS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-example-credentials
+              key: metrics_password
+        volumeMounts:
+        - name: opensearch-keystore
+          mountPath: "/tmp/keystore"
+        - name: data
+          mountPath: "/usr/share/opensearch/data"
+        - name: certificates
+          mountPath: "/usr/share/opensearch/config/certs"
+          readOnly: true
+        - name: security-config
+          mountPath: "/usr/share/opensearch/config/opensearch-security/internal_users.yml"
+          subPath: internal_users.yml
+          readOnly: true
+        - name: security-config
+          mountPath: "/usr/share/opensearch/config/opensearch-security/roles.yml"
+          subPath: roles.yml
+          readOnly: true
+        readinessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 5
+          exec:
+            command:
+            - bash
+            - "-c"
+            - curl --fail --silent --max-time 2 -o /dev/null -u "metrics:$METRICS_PASSWORD"
+              http://localhost:9200/_cluster/health?local=true
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 500m
+          limits:
+            memory: 4Gi
+            cpu: 1
+      volumes:
+      - name: opensearch-keystore
+        emptyDir: {}
+      - name: certificates
+        secret:
+          secretName: opensearch-example-certificates
+          items:
+          - key: ca.crt
+            path: ca.crt
+          - key: node.crt
+            path: node.crt
+          - key: node.key
+            path: node.key
+      - name: security-config
+        configMap:
+          name: opensearch-example-security-config
+      - name: repository-secrets
+        projected:
+          sources:
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Delete
+    whenScaled: Delete
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards-example
+  namespace: default
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+    opensearch.reclaim-the-stack.com/cluster: example
+  ownerReferences:
+  - apiVersion: opensearch.reclaim-the-stack.com/v1alpha1
+    kind: OpenSearch
+    name: example
+    uid: 123e4567-e89b-12d3-a456-426614174000
+    controller: true
+    blockOwnerDeletion: true
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch-dashboards
+      opensearch.reclaim-the-stack.com/cluster: example
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch-dashboards
+        opensearch.reclaim-the-stack.com/cluster: example
+    spec:
+      containers:
+      - name: dashboards
+        image: opensearchproject/opensearch-dashboards:3.1.0
+        ports:
+        - name: http
+          containerPort: 5601
+        env:
+        - name: OPENSEARCH_HOSTS
+          value: http://opensearch-example-client.default.svc.cluster.local:9200
+        - name: OPENSEARCH_USERNAME
+          value: kibanaserver
+        - name: OPENSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-example-credentials
+              key: kibanaserver_password
+        livenessProbe:
+          failureThreshold: 10
+          httpGet:
+            path: "/api/reporting/stats"
+            port: 5601
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 5

@@ -6,5 +6,9 @@ inherit_gem:
   rubocop-mynewsdesk:
     - .rubocop.yml
 
+# The fakes in the specs keep the keyword arguments of the methods they stand in for, so wrong calls fail like real ones
+Lint/UnusedBlockArgument:
+  AllowUnusedKeywordArguments: true
+
 Rails: { Enabled: false }
 RSpecRails: { Enabled: false }
