@@ -7,7 +7,7 @@ Still missing: block downgrades (eg. a CEL transition rule on the image tag), an
 
 - Health aware PodDisruptionBudget to protect against node drains evicting several pods in a row: maxUnavailable 1 while the cluster is green and 0 otherwise (the ECK approach). A static PDB only looks at pod readiness so it wouldn't prevent red blips during drains.
 
-- Online disk expansion: changing diskSize is rejected since volumeClaimTemplates are immutable. Patch the PVCs, then orphan delete and re-apply the StatefulSet (the ECK approach). Also support storageClassName.
+- Online disk expansion: the CRD rejects diskSize changes since volumeClaimTemplates are immutable, and existing StatefulSets keep their size. On storage classes which support expansion, relax the CRD rule to only reject shrinking (quantity(self).compareTo(quantity(oldSelf)) >= 0), patch the PVCs, then orphan delete and re-apply the StatefulSet (the ECK approach), and support storageClassName. Hostpath volumes can't be expanded, moving such clusters to bigger disks needs replacing nodes one at a time: drain the node's shards like a scale down does, then recreate its pod and PVC.
 
 - Status conditions (Ready, Reconciled with the error, Progressing, SnapshotsHealthy with the last successful snapshot per policy) and Warning events on reconcile failures, so failures show up in kubectl and GitOps health checks.
 
