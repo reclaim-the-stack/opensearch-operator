@@ -22,8 +22,31 @@ RSpec.describe Kubernetes::Resource do
     it "raises on other errors rather than returning them in place of the object" do
       %w[403 429 503].each do |code|
         respond(code, { "kind" => "Status", "code" => code.to_i, "message" => "status #{code}" })
-        expect { statefulsets.get("demo", namespace: "default") }.to raise_error(Kubernetes::Error, /failed: #{code}/)
+        expect { statefulsets.get("demo", namespace: "default") }
+          .to raise_error(Kubernetes::Error, "Get statefulsets/demo in namespace default failed: #{code} status #{code}")
       end
+    end
+  end
+
+  describe "failed writes" do
+    subject(:statefulsets) { Kubernetes::Resource.new("statefulsets", group: "apps") }
+
+    let(:manifest) { { "metadata" => { "name" => "demo", "namespace" => "default" } } }
+
+    def respond(code, body) = allow(Kubernetes).to receive(:apply_patch).and_return(Struct.new(:code, :body).new(code, body))
+
+    it "raise with the message of the Status the API server answered, like kubectl shows it" do
+      message = "quantities must match the regular expression"
+      respond("500", { "kind" => "Status", "status" => "Failure", "message" => message, "code" => 500 }.to_json)
+
+      expect { statefulsets.apply(manifest) }.to raise_error(Kubernetes::Error, "Apply failed: 500 #{message}")
+    end
+
+    it "raise with the body of a response which isn't a Status, eg. from a proxy" do
+      respond("502", "<html><body>Bad Gateway</body></html>")
+
+      expect { statefulsets.apply(manifest) }
+        .to raise_error(Kubernetes::Error, "Apply failed: 502 <html><body>Bad Gateway</body></html>")
     end
   end
 
@@ -197,7 +220,8 @@ RSpec.describe Kubernetes::Resource do
 
     it "raises permanent errors with the server's message" do
       message = "sendInitialEvents is forbidden for watch unless the WatchList feature gate is enabled"
-      expect { watch({ status: "400", message: }) }.to raise_error(Kubernetes::Error, /sendInitialEvents is forbidden/)
+      expect { watch({ status: "400", message: }) }
+        .to raise_error(Kubernetes::Error, "Watch of opensearches failed with status 400: #{message}")
     end
 
     it "raises on an ERROR event with a permanent code" do
