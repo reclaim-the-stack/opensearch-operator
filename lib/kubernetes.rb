@@ -109,7 +109,7 @@ module Kubernetes
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}"
       response = Kubernetes.get(path, {})
       unless response.code.start_with?("2") || response.code == "404"
-        raise Error, "Get #{@plural}/#{name} in namespace #{namespace} failed: #{response.code} #{response.body}"
+        raise Error, "Get #{@plural}/#{name} in namespace #{namespace} failed: #{response.code} #{failure_message(response)}"
       end
 
       JSON.parse(response.body)
@@ -133,7 +133,7 @@ module Kubernetes
 
       path = "#{@api}/namespaces/#{namespace}/#{@plural}"
       response = Kubernetes.post(path, params)
-      raise Error, "Create failed: #{response.code} #{response.body}" unless response.code.start_with?("2")
+      raise Error, "Create failed: #{response.code} #{failure_message(response)}" unless response.code.start_with?("2")
 
       JSON.parse(response.body)
     end
@@ -163,7 +163,7 @@ module Kubernetes
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}?#{query_string}"
 
       response = Kubernetes.apply_patch(path, params)
-      raise Error, "Apply failed: #{response.code} #{response.body}" unless response.code.start_with?("2")
+      raise Error, "Apply failed: #{response.code} #{failure_message(response)}" unless response.code.start_with?("2")
 
       JSON.parse(response.body)
     end
@@ -172,7 +172,7 @@ module Kubernetes
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}"
       path += "/#{subresource}" if subresource
       response = Kubernetes.merge_patch(path, params)
-      raise Error, "Patch failed: #{response.code} #{response.body}" unless response.code.start_with?("2")
+      raise Error, "Patch failed: #{response.code} #{failure_message(response)}" unless response.code.start_with?("2")
 
       JSON.parse(response.body)
     end
@@ -180,7 +180,7 @@ module Kubernetes
     def delete(name, namespace:)
       path = "#{@api}/namespaces/#{namespace}/#{@plural}/#{name}"
       response = Kubernetes.delete(path)
-      raise Error, "Delete failed: #{response.code} #{response.body}" unless response.code.start_with?("2")
+      raise Error, "Delete failed: #{response.code} #{failure_message(response)}" unless response.code.start_with?("2")
 
       JSON.parse(response.body)
     end
@@ -240,7 +240,7 @@ module Kubernetes
           Kubernetes.get(path, params) do |response|
             status = response.code
             unless response.is_a?(Net::HTTPOK)
-              status_message = response.body
+              status_message = failure_message(response)
               next
             end
 
@@ -326,6 +326,16 @@ module Kubernetes
           retry_delay = [retry_delay * 2, 30].min
         end
       end
+    end
+
+    private
+
+    # The message of the Status object which the API server answers failed requests with, as kubectl shows it. Other
+    # bodies, eg. the error page of a proxy in front of the API server, are returned as they are.
+    def failure_message(response)
+      JSON.parse(response.body).fetch("message")
+    rescue JSON::ParserError, KeyError
+      response.body
     end
   end
 
