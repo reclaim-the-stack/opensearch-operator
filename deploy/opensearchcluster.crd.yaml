@@ -24,6 +24,9 @@ spec:
         - name: Nodes
           type: integer
           jsonPath: .status.nodes
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
         - name: Phase
           type: string
           jsonPath: .status.phase
@@ -216,3 +219,28 @@ spec:
                   type: string
                 phase:
                   type: string
+                conditions:
+                  type: array
+                  description: Reconciled tells whether the latest generation was applied, with the error if it wasn't. Ready is True once it was applied, the cluster is reachable, not red and no rolling restart or scaling is in progress.
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime, reason, message]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string

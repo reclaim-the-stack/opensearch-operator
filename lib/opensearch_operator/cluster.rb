@@ -20,6 +20,8 @@ class OpensearchOperator
 
     def initialize(manifest)
       @manifest = manifest
+      # The watch thread and the watcher thread both update the status, and each patch replaces all conditions
+      @status_mutex = Mutex.new
     end
 
     def name = @manifest.fetch("metadata").fetch("name")
@@ -58,6 +60,8 @@ class OpensearchOperator
         LOGGER.info "Generation #{generation} and manifest version #{MANIFEST_VERSION} already observed for #{namespace}/#{name}, skipping reconciliation steps"
         initialize_or_trigger_watcher
         @reconciled_generation = generation
+        @reconcile_failure = nil
+        patch_status
         return
       end
 
@@ -71,8 +75,18 @@ class OpensearchOperator
       ensure_dashboards_service
 
       initialize_or_trigger_watcher
-      record_observed_state(generation)
       @reconciled_generation = generation
+      @reconcile_failure = nil
+      patch_status(observedGeneration: generation, operatorManifestVersion: MANIFEST_VERSION)
+    rescue StandardError => e
+      message = "#{e.class}: #{e.message}".truncate(1000)
+      # Retries of the generation fail the same way, one event per distinct failure keeps them from flooding the events
+      unless @reconcile_failure == { generation:, message: }
+        emit_event("ReconcileFailed", "Failed to reconcile generation #{generation}: #{message}", type: "Warning")
+      end
+      @reconcile_failure = { generation:, message: }
+      patch_status
+      raise
     end
 
     def initialize_or_trigger_watcher
@@ -175,29 +189,14 @@ class OpensearchOperator
     def update_status(new_state, changed_keys)
       return unless changed_keys.intersect?(KEYS_AFFECTING_STATUS)
 
-      params = {
-        status: {
-          health: new_state[:status]&.capitalize,
-          nodes: new_state[:number_of_nodes],
-          version: new_state[:version],
-        },
-      }
-
-      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params:)
-    rescue StandardError => e
-      Sentry.capture_exception(e)
-      LOGGER.error "Failed to update status for #{namespace}/#{name}: #{e.class}: #{e.message}"
+      patch_status(health: new_state[:status]&.capitalize, nodes: new_state[:number_of_nodes], version: new_state[:version])
     end
 
     # Sets status.phase (visible in `kubectl get opensearch`), skipping the API call when unchanged
     def update_phase(phase)
       return if @phase == phase
 
-      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: { phase: } })
-      @phase = phase
-    rescue StandardError => e
-      Sentry.capture_exception(e)
-      LOGGER.error "Failed to update phase for #{namespace}/#{name}: #{e.class}: #{e.message}"
+      @phase = phase if patch_status(phase:)
     end
 
     # Emits a Kubernetes Event attached to the OpenSearch resource (visible in `kubectl describe opensearch`)
@@ -527,21 +526,74 @@ class OpensearchOperator
       ].to_json
     end
 
-    def record_observed_state(generation)
-      CLUSTERS_RESOURCE.patch(
-        name,
-        namespace:,
-        subresource: "status",
-        params: {
-          status: {
-            observedGeneration: generation,
-            operatorManifestVersion: MANIFEST_VERSION,
-          },
-        },
-      )
+    # Patches the given status fields along with the conditions if they changed, which a merge patch replaces as a whole.
+    # Returns whether the patch succeeded.
+    def patch_status(fields = {})
+      @status_mutex.synchronize do
+        new_conditions = conditions(phase: fields.fetch(:phase, @phase))
+        conditions_changed = new_conditions != published_conditions
+        return true if fields.empty? && !conditions_changed
+
+        status = conditions_changed ? fields.merge(conditions: new_conditions) : fields
+        CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: })
+        @published_conditions = new_conditions
+        true
+      end
     rescue StandardError => e
       Sentry.capture_exception(e)
-      LOGGER.error "Failed to record observed state for #{namespace}/#{name}: #{e.class}: #{e.message}"
+      LOGGER.error "Failed to update the status of #{namespace}/#{name}: #{e.class}: #{e.message}"
+      false
+    end
+
+    # The Reconciled and Ready conditions (standard metav1.Condition fields) for `kubectl wait --for=condition=Ready` and
+    # GitOps health checks. Until the watcher reported the health and the rolling restart the phase, eg. after an operator
+    # restart, the published Ready condition is kept.
+    def conditions(phase:)
+      generation = @reconcile_failure ? @reconcile_failure.fetch(:generation) : @reconciled_generation
+      failure_message = @reconcile_failure&.fetch(:message)
+      health = @watcher&.state&.dig(:status)
+
+      reconciled =
+        if failure_message
+          ["False", "ReconcileFailed", failure_message]
+        else
+          ["True", "Reconciled", "Generation #{generation} is applied"]
+        end
+      ready =
+        if phase == "Deleting"
+          ["False", "Deleting", "The cluster is being deleted"]
+        elsif failure_message
+          ["False", "ReconcileFailed", failure_message]
+        elsif health.nil? || phase.nil?
+          nil
+        elsif health == "unreachable"
+          ["False", "Unreachable", "The OpenSearch REST API isn't reachable"]
+        elsif health == "red"
+          ["False", "HealthRed", "Cluster health is red"]
+        elsif phase != "Running"
+          ["False", "Progressing", phase]
+        else
+          ["True", "Running", "Cluster health is #{health}"]
+        end
+
+      { "Reconciled" => reconciled, "Ready" => ready }.filter_map do |type, (status, reason, message)|
+        published = published_conditions.find { |condition| condition["type"] == type }
+        next published unless status
+
+        transitioned = published&.dig("status") != status
+        {
+          "type" => type,
+          "status" => status,
+          "observedGeneration" => generation,
+          "lastTransitionTime" => transitioned ? Time.now.utc.iso8601 : published.fetch("lastTransitionTime"),
+          "reason" => reason,
+          "message" => message,
+        }
+      end
+    end
+
+    def published_conditions
+      @published_conditions ||= @manifest.dig("status", "conditions").to_a
     end
   end
 end
