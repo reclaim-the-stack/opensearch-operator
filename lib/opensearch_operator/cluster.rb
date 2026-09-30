@@ -13,6 +13,10 @@ class OpensearchOperator
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
+    # A failed generation is retried at most this often. Events which don't change the generation, like the status update
+    # reporting the failure, would otherwise retry it right away.
+    RECONCILE_RETRY_INTERVAL = 1.minute
+
     # Failed snapshot repository upserts are retried with a backoff rather than on every poll since their causes, eg. an
     # unreachable S3 endpoint or a bucket which doesn't exist, tend to last a while
     SNAPSHOT_REPOSITORIES_RETRY_INTERVAL = 5.minutes
@@ -20,6 +24,8 @@ class OpensearchOperator
 
     def initialize(manifest)
       @manifest = manifest
+      # The watch thread and the watcher thread both update the status, and each patch replaces all conditions
+      @status_mutex = Mutex.new
     end
 
     def name = @manifest.fetch("metadata").fetch("name")
@@ -43,6 +49,9 @@ class OpensearchOperator
       # A generation whose reconciliation failed gets retried by the next event of the cluster, eg. a watch resync
       if generation == @reconciled_generation
         LOGGER.info "Generation #{generation} of #{namespace}/#{name} already reconciled, skipping"
+      elsif @reconcile_failure&.fetch(:generation) == generation &&
+            Time.now - @reconcile_failure.fetch(:failed_at) < RECONCILE_RETRY_INTERVAL
+        LOGGER.info "Generation #{generation} of #{namespace}/#{name} failed to reconcile recently, retrying later"
       else
         LOGGER.info "Generation #{generation} of #{namespace}/#{name} not reconciled yet, reconsiling"
         reconsile
@@ -58,6 +67,8 @@ class OpensearchOperator
         LOGGER.info "Generation #{generation} and manifest version #{MANIFEST_VERSION} already observed for #{namespace}/#{name}, skipping reconciliation steps"
         initialize_or_trigger_watcher
         @reconciled_generation = generation
+        @reconcile_failure = nil
+        patch_status
         return
       end
 
@@ -71,8 +82,20 @@ class OpensearchOperator
       ensure_dashboards_service
 
       initialize_or_trigger_watcher
-      record_observed_state(generation)
       @reconciled_generation = generation
+      @reconcile_failure = nil
+      patch_status(observedGeneration: generation, operatorManifestVersion: MANIFEST_VERSION)
+    rescue StandardError => e
+      message = "#{e.class}: #{e.message}".truncate(1000)
+      # Retries of the generation fail the same way, one event per distinct failure keeps them from flooding the events.
+      # Compared to the published condition, which also holds across operator restarts.
+      published = published_conditions.find { |condition| condition["type"] == "Reconciled" }
+      unless published&.values_at("status", "observedGeneration", "message") == ["False", generation, message]
+        emit_event("ReconcileFailed", "Failed to reconcile generation #{generation}: #{message}", type: "Warning")
+      end
+      @reconcile_failure = { generation:, message:, failed_at: Time.now }
+      patch_status
+      raise
     end
 
     def initialize_or_trigger_watcher
@@ -175,29 +198,22 @@ class OpensearchOperator
     def update_status(new_state, changed_keys)
       return unless changed_keys.intersect?(KEYS_AFFECTING_STATUS)
 
-      params = {
-        status: {
-          health: new_state[:status]&.capitalize,
-          nodes: new_state[:number_of_nodes],
-          version: new_state[:version],
-        },
-      }
+      patch_status(health: new_state[:status]&.capitalize, nodes: new_state[:number_of_nodes], version: new_state[:version])
+    end
 
-      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params:)
-    rescue StandardError => e
-      Sentry.capture_exception(e)
-      LOGGER.error "Failed to update status for #{namespace}/#{name}: #{e.class}: #{e.message}"
+    # Set by each tick of the rolling restart to the StatefulSet generation it works with. Ready waits for it to reach the
+    # generation the latest reconciliation applied (see #conditions).
+    def evaluated_statefulset_generation=(generation)
+      # The phase of an earlier generation doesn't tell whether the new one needs a rolling restart or scaling
+      @phase = nil if generation != @evaluated_statefulset_generation
+      @evaluated_statefulset_generation = generation
     end
 
     # Sets status.phase (visible in `kubectl get opensearch`), skipping the API call when unchanged
     def update_phase(phase)
       return if @phase == phase
 
-      CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: { phase: } })
-      @phase = phase
-    rescue StandardError => e
-      Sentry.capture_exception(e)
-      LOGGER.error "Failed to update phase for #{namespace}/#{name}: #{e.class}: #{e.message}"
+      @phase = phase if patch_status(phase:)
     end
 
     # Emits a Kubernetes Event attached to the OpenSearch resource (visible in `kubectl describe opensearch`)
@@ -487,7 +503,7 @@ class OpensearchOperator
         version:,
       )
 
-      Kubernetes.statefulsets.apply(statefulset)
+      @applied_statefulset_generation = Kubernetes.statefulsets.apply(statefulset).dig("metadata", "generation")
     end
 
     def ensure_dashboards_deployment
@@ -527,21 +543,77 @@ class OpensearchOperator
       ].to_json
     end
 
-    def record_observed_state(generation)
-      CLUSTERS_RESOURCE.patch(
-        name,
-        namespace:,
-        subresource: "status",
-        params: {
-          status: {
-            observedGeneration: generation,
-            operatorManifestVersion: MANIFEST_VERSION,
-          },
-        },
-      )
+    # Patches the given status fields along with the conditions if they changed, which a merge patch replaces as a whole.
+    # Returns whether the patch succeeded.
+    def patch_status(fields = {})
+      @status_mutex.synchronize do
+        new_conditions = conditions(phase: fields.fetch(:phase, @phase))
+        conditions_changed = new_conditions != published_conditions
+        return true if fields.empty? && !conditions_changed
+
+        status = conditions_changed ? fields.merge(conditions: new_conditions) : fields
+        CLUSTERS_RESOURCE.patch(name, namespace:, subresource: "status", params: { status: })
+        @published_conditions = new_conditions
+        true
+      end
     rescue StandardError => e
       Sentry.capture_exception(e)
-      LOGGER.error "Failed to record observed state for #{namespace}/#{name}: #{e.class}: #{e.message}"
+      LOGGER.error "Failed to update the status of #{namespace}/#{name}: #{e.class}: #{e.message}"
+      false
+    end
+
+    # The Reconciled and Ready conditions (standard metav1.Condition fields) for `kubectl wait --for=condition=Ready` and
+    # GitOps health checks. Until the watcher reported the health and the rolling restart the phase, eg. after an operator
+    # restart, the published Ready condition is kept.
+    def conditions(phase:)
+      generation = @reconcile_failure ? @reconcile_failure.fetch(:generation) : @reconciled_generation
+      failure_message = @reconcile_failure&.fetch(:message)
+      health = @watcher&.state&.dig(:status)
+
+      reconciled =
+        if failure_message
+          ["False", "ReconcileFailed", failure_message]
+        else
+          ["True", "Reconciled", "Generation #{generation} is applied"]
+        end
+      ready =
+        if phase == "Deleting"
+          ["False", "Deleting", "The cluster is being deleted"]
+        elsif failure_message
+          ["False", "ReconcileFailed", failure_message]
+        elsif health.nil? || phase.nil?
+          nil
+        elsif health == "unreachable"
+          ["False", "Unreachable", "The OpenSearch REST API isn't reachable"]
+        elsif health == "red"
+          ["False", "HealthRed", "Cluster health is red"]
+        elsif @evaluated_statefulset_generation.to_i < @applied_statefulset_generation.to_i
+          # A Running phase can predate the applied StatefulSet, eg. from a tick which read it before the apply
+          ["False", "Progressing", "Applying generation #{generation}"]
+        elsif phase != "Running"
+          ["False", "Progressing", phase]
+        else
+          ["True", "Running", "Cluster health is #{health}"]
+        end
+
+      { "Reconciled" => reconciled, "Ready" => ready }.filter_map do |type, (status, reason, message)|
+        published = published_conditions.find { |condition| condition["type"] == type }
+        next published unless status
+
+        transitioned = published&.dig("status") != status
+        {
+          "type" => type,
+          "status" => status,
+          "observedGeneration" => generation,
+          "lastTransitionTime" => transitioned ? Time.now.utc.iso8601 : published.fetch("lastTransitionTime"),
+          "reason" => reason,
+          "message" => message,
+        }
+      end
+    end
+
+    def published_conditions
+      @published_conditions ||= @manifest.dig("status", "conditions").to_a
     end
   end
 end

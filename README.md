@@ -82,6 +82,35 @@ The remaining nodes need room for all shards. The scale down waits for as long a
 
 The operator manages `cluster.routing.allocation.exclude._name` and the voting configuration exclusions, so don't use them to drain nodes by hand (`cluster.routing.allocation.exclude._ip` works).
 
+## Status
+
+`kubectl get opensearch` shows the version, health and number of nodes of each cluster, whether it's ready, and its phase, eg. the progress of a rolling restart. `kubectl describe opensearch <name>` also shows two conditions with their messages:
+
+- `Reconciled` tells whether the latest generation of the spec was applied, with the error if it wasn't. Failed reconciliations are retried on the next change of the spec and every 10 minutes.
+- `Ready` is `True` once the latest generation was applied, the cluster is reachable, its health isn't red and no rolling restart or scaling is in progress. Otherwise its reason is `ReconcileFailed`, `Unreachable`, `HealthRed`, `Progressing` or `Deleting`.
+
+`kubectl wait --for=condition=Ready opensearch/<name> --timeout=15m` waits for a cluster to be ready, eg. after creating it.
+
+For Argo CD to show the health of OpenSearch resources, add a custom health check to `argocd-cm`:
+
+```yaml
+resource.customizations.health.opensearch.reclaim-the-stack.com_OpenSearch: |
+  hs = { status = "Progressing", message = "Waiting for the operator" }
+  if obj.status ~= nil and obj.status.conditions ~= nil then
+    for _, condition in ipairs(obj.status.conditions) do
+      if condition.type == "Ready" and condition.observedGeneration == obj.metadata.generation then
+        hs.message = condition.message
+        if condition.status == "True" then
+          hs.status = "Healthy"
+        elseif condition.reason ~= "Progressing" then
+          hs.status = "Degraded"
+        end
+      end
+    end
+  end
+  return hs
+```
+
 ## Integrate with prometheus operator for metrics
 
 Note: This assumes you're running Reclaim the Stack with `kube-prometheus-stack` running in the `monitoring` namespace and is using Sealed Secrets for secrets management. Adjust as needed.
@@ -131,7 +160,7 @@ The selector only matches the headless service of each cluster, which includes p
 Prerequisites: Ruby 3.4.5
 
 Install dependencies: `bundle install`
-Run tests: `bundle exec rspec`
+Run tests: `bundle exec rspec` (after changing a template, regenerate the rendered manifests in `spec/fixtures/manifests/` with `UPDATE_MANIFEST_SNAPSHOTS=1 bundle exec rspec`)
 Build image: `docker build -t opensearch-operator-rb .`
 
 ### Local Run
