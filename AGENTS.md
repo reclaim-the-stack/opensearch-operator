@@ -25,7 +25,9 @@
 
 ## Testing Guidelines
 
-- Avoid implementing or running specs
+- Add or update specs for behavior changes and run `bundle exec rspec`, CI runs it for every pull request.
+- Specs fake the Kubernetes API and OpenSearch (see `spec/support/`), none of them need a cluster.
+- The manifests the operator renders are compared to `spec/fixtures/manifests/`. After a template change, review the diff and regenerate them with `UPDATE_MANIFEST_SNAPSHOTS=1 bundle exec rspec`.
 
 ## Commit & Pull Request Guidelines
 

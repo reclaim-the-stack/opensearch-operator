@@ -160,7 +160,7 @@ The selector only matches the headless service of each cluster, which includes p
 Prerequisites: Ruby 3.4.5
 
 Install dependencies: `bundle install`
-Run tests: `bundle exec rspec`
+Run tests: `bundle exec rspec` (after changing a template, regenerate the rendered manifests in `spec/fixtures/manifests/` with `UPDATE_MANIFEST_SNAPSHOTS=1 bundle exec rspec`)
 Build image: `docker build -t opensearch-operator-rb .`
 
 ### Local Run
