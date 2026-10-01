@@ -55,6 +55,12 @@ Look at the example files to understand the CRD structure.
 
 TODO: add comprehensive documentation.
 
+## Images
+
+`spec.image` can be any OpenSearch image. With the official images (`opensearchproject/opensearch`) the startup script installs the Prometheus exporter on every start, and the `repository-s3` plugin when snapshot repositories are configured. A pod then can't start while GitHub or OpenSearch's artifact server is unreachable. The exporter is also released for each OpenSearch version separately, often days or weeks after it, so upgrading to a version without one leaves the first restarted pod crashing.
+
+`ghcr.io/reclaim-the-stack/opensearch:<version>` comes with those plugins installed, so its pods start without downloading anything. CI builds it for the versions listed in `.github/workflows/opensearch-images.yml`, currently 3.8.0, and a version can only be built once its exporter is released. Upgrade the operator to 0.15.0 or later before switching to it, earlier versions fail to install the plugins a second time.
+
 ## Bootstrapping
 
 A new cluster bootstraps, ie. elects its first cluster manager, on its first start, however long its pods take to start (eg. while nodes are added or images pulled). Once it has formed, the operator records its UUID in the ConfigMap `opensearch-<name>-bootstrap`, and nodes started from then on don't bootstrap any more. A node without data which started while no cluster manager was reachable would otherwise form a second, empty cluster.

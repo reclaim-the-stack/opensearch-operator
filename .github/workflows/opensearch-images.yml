@@ -1,0 +1,54 @@
+name: OpenSearch images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - images/opensearch/**
+      - .github/workflows/opensearch-images.yml
+  pull_request:
+    paths:
+      - images/opensearch/**
+      - .github/workflows/opensearch-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Each version needs a release of the Prometheus exporter for it
+        opensearch_version: ["3.8.0"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pull requests only build, pushes to master also publish
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/opensearch
+          platforms: linux/amd64,linux/arm64
+          build-args: OPENSEARCH_VERSION=${{ matrix.opensearch_version }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ghcr.io/${{ github.repository_owner }}/opensearch:${{ matrix.opensearch_version }}
+          cache-from: type=gha,scope=opensearch-${{ matrix.opensearch_version }}
+          cache-to: type=gha,mode=max,scope=opensearch-${{ matrix.opensearch_version }}
