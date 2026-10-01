@@ -109,6 +109,9 @@ spec:
               mountPath: {{{repository_secrets_path}}}
               readOnly: true
             {{/has_repositories}}
+            - name: bootstrap
+              mountPath: {{{bootstrap_path}}}
+              readOnly: true
           readinessProbe:
             failureThreshold: 3
             initialDelaySeconds: 10
@@ -138,6 +141,11 @@ spec:
         - name: security-config
           configMap:
             name: opensearch-{{{name}}}-security-config
+        - name: bootstrap
+          configMap:
+            name: opensearch-{{{name}}}-bootstrap
+            # Created once the cluster bootstrapped (see Cluster#record_bootstrap)
+            optional: true
         - name: repository-secrets
           projected:
             sources:

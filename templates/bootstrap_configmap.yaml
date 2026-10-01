@@ -1,0 +1,16 @@
+# Records that the cluster bootstrapped, read by the startup script of its pods (see Cluster#record_bootstrap)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-%{name}-bootstrap
+  namespace: %{namespace}
+  labels:
+    app.kubernetes.io/managed-by: opensearch-operator
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: %{name}
+  ownerReferences: %{owner_references}
+data:
+  cluster_uuid: "%{cluster_uuid}"
+  # A ConfigMap left over from a deleted resource with the same name doesn't count
+  resource_uid: "%{uid}"

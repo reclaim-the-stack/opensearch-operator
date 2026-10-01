@@ -23,8 +23,8 @@ class FakeWatcher
 end
 
 module FakeWatcherHelpers
-  # Every Cluster gets the same fake watcher
-  def fake_watcher(client: nil)
+  # Every Cluster gets the same fake watcher. The default client only answers GET / of a formed cluster.
+  def fake_watcher(client: Struct.new(:info).new({ "cluster_uuid" => "Q7rVjM5BSnefOwj1a8d2Tw" }))
     @fake_watcher ||= FakeWatcher.new(client).tap do |watcher|
       allow(OpensearchOperator::OpensearchWatcher).to receive(:new).and_return(watcher)
     end

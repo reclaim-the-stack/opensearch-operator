@@ -1,13 +1,11 @@
-# Simplest possible way to guesstimate if we need to set cluster.initial_cluster_manager_nodes or not
-# If the cluster is being created now (within the last 5 minutes), we set it
-# If the cluster was created more than 5 minutes ago, we assume it's already formed
-CLUSTER_CREATED_TIMESTAMP={{creation_timestamp_epoch}}
-CURRENT_TIMESTAMP=$(date +%s)
-if [ $((CURRENT_TIMESTAMP - CLUSTER_CREATED_TIMESTAMP)) -lt 300 ]; then
-  echo "Cluster created less than 5 minutes ago, setting cluster.initial_cluster_manager_nodes"
-  INITIAL_CLUSTER_MANAGER_NODES='"opensearch-{{name}}-0"'
+# Bootstrapping elects the first cluster manager of a new cluster, however late its pods start. Once the cluster formed
+# the operator records its UUID (see Cluster#record_bootstrap) and nodes mustn't bootstrap any more: a node without
+# data which starts while no cluster manager is reachable would form a second, empty cluster.
+if [ "$(cat {{{bootstrap_path}}}/resource_uid 2>/dev/null)" = "{{{uid}}}" ]; then
+  echo "Cluster $(cat {{{bootstrap_path}}}/cluster_uuid) has bootstrapped, not setting cluster.initial_cluster_manager_nodes"
 else
-  echo "Cluster created more than 5 minutes ago, not setting cluster.initial_cluster_manager_nodes"
+  echo "Cluster hasn't bootstrapped yet, setting cluster.initial_cluster_manager_nodes"
+  INITIAL_CLUSTER_MANAGER_NODES='"opensearch-{{name}}-0"'
 fi
 
 # Seed hosts via the headless service

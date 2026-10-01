@@ -9,7 +9,7 @@ require "yaml"
 class OpensearchOperator
   class Cluster
     # Bump when operator-managed manifests change and existing clusters must be reconciled again.
-    MANIFEST_VERSION = 3
+    MANIFEST_VERSION = 4
 
     KEYS_AFFECTING_STATUS = %i[status number_of_nodes version].freeze
 
@@ -115,6 +115,8 @@ class OpensearchOperator
       # Consecutive failed snapshot repository upserts, a spec change retries right away but keeps counting
       snapshot_repositories_failures = 0
       @watcher.on_poll do |health, nodes|
+        # Ahead of the tick, which might restart pods
+        record_bootstrap
         settled = rolling_restart.tick(health, nodes)
         # Status updates follow changes, this retries a failed update of the PodDisruptionBudget or the conditions
         patch_status
@@ -433,7 +435,6 @@ class OpensearchOperator
     end
 
     def ensure_statefulset
-      creation_timestamp_epoch = Time.parse(@manifest.dig("metadata", "creationTimestamp")).to_i
       node_selector = spec["nodeSelector"].to_json
       resources = spec["resources"].to_json
       tolerations = spec["tolerations"].to_json
@@ -454,14 +455,16 @@ class OpensearchOperator
 
       config_yaml_string = spec["config"].present? ? YAML.dump(spec["config"]).delete_prefix("---\n") : nil
 
+      bootstrap_path = "/tmp/bootstrap"
       startup_script = Template["_startup_script"].render(
-        creation_timestamp_epoch:,
+        bootstrap_path:,
         config_yaml_string:,
         has_repositories: repositories.any?,
         name:,
         namespace:,
         prometheus_exporter_version:,
         repositories:,
+        uid:,
       ).to_json
 
       # Heap size is set to 50% of the memory limit, up to a maximum of 31Gi to avoid compressed oops being disabled
@@ -493,6 +496,7 @@ class OpensearchOperator
         existing_statefulset.dig("spec", "volumeClaimTemplates", 0, "spec", "resources", "requests", "storage") || disk_size
 
       statefulset = Template["statefulset"].render(
+        bootstrap_path:,
         disk_size: statefulset_disk_size,
         has_repositories: repositories.any?,
         heap_size:,
@@ -569,6 +573,24 @@ class OpensearchOperator
       Sentry.capture_exception(e)
       LOGGER.error "Failed to update the status of #{namespace}/#{name}: #{e.class}: #{e.message}"
       false
+    end
+
+    # Records the UUID of the formed cluster once OpenSearch reports one, so that pods started from then on leave out
+    # cluster.initial_cluster_manager_nodes (see templates/_startup_script.sh.mustache). Recorded once per operator run,
+    # which covers clusters which formed before the operator recorded bootstraps, and again whenever the UUID changes, ie.
+    # the cluster bootstrapped anew.
+    def record_bootstrap
+      cluster_uuid = @watcher.client.info.fetch("cluster_uuid")
+      # The UUID is _na_ until a cluster manager was elected
+      return if cluster_uuid == "_na_" || cluster_uuid == @recorded_cluster_uuid
+
+      bootstrap_configmap = Template["bootstrap_configmap"].render(name:, namespace:, owner_references:, uid:, cluster_uuid:)
+      Kubernetes.configmaps.apply(bootstrap_configmap)
+      @recorded_cluster_uuid = cluster_uuid
+      LOGGER.info "Recorded the bootstrap of #{namespace}/#{name}, cluster UUID #{cluster_uuid}"
+    rescue StandardError => e
+      Sentry.capture_exception(e)
+      LOGGER.error "Failed to record the bootstrap of #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
 
     # Node drains may evict one OpenSearch pod while the cluster is green and no rolling restart or scaling is in
