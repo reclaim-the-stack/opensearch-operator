@@ -628,6 +628,16 @@ RSpec.describe OpensearchOperator::Cluster do
       expect(applied_max_unavailable).to eq [1, 0, 1]
     end
 
+    it "follows the phase of the rolling restart while publishing it fails" do
+      fake_watcher.report("green")
+      tick("Running")
+      fake_kubernetes.status_patch_error = "Patch failed: 500 etcdserver: request timed out"
+      tick("Rolling restart: restarting opensearch-example-2 (2 pods remaining)")
+      fake_watcher.poll
+
+      expect(applied_max_unavailable).to eq [1, 0]
+    end
+
     it "leaves the budget of a cluster being deleted alone" do
       fake_watcher.report("green")
       tick("Running")

@@ -207,15 +207,20 @@ class OpensearchOperator
     # generation the latest reconciliation applied (see #conditions).
     def evaluated_statefulset_generation=(generation)
       # The phase of an earlier generation doesn't tell whether the new one needs a rolling restart or scaling
-      @phase = nil if generation != @evaluated_statefulset_generation
+      if generation != @evaluated_statefulset_generation
+        @phase = nil
+        @published_phase = nil
+      end
       @evaluated_statefulset_generation = generation
     end
 
-    # Sets status.phase (visible in `kubectl get opensearch`), skipping the API call when unchanged
+    # Sets status.phase (visible in `kubectl get opensearch`), skipping the API call when unchanged. The conditions and
+    # the PodDisruptionBudget follow the phase right away, also while publishing it fails.
     def update_phase(phase)
-      return if @phase == phase
+      @phase = phase
+      return if @published_phase == phase
 
-      @phase = phase if patch_status(phase:)
+      @published_phase = phase if patch_status(phase:)
     end
 
     # Emits a Kubernetes Event attached to the OpenSearch resource (visible in `kubectl describe opensearch`)
