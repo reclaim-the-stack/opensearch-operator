@@ -106,10 +106,9 @@ class OpensearchOperator
         # Only a complete poll skips the sleep, a poll which keeps failing after the health request mustn't spin
         skip_sleep = wait_for_green
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
-        # An unreachable cluster is expected at times (bootstrapping, full outage) so we report it as a warning
-        # rather than an error to stay out of alerting, and surface it via the status instead.
+        # An unreachable cluster is expected at times, eg. while it bootstraps, and isn't a bug of the operator. It's logged and
+        # shows in the status (the Unreachable reason of the Ready condition) rather than being reported to Sentry.
         LOGGER.warn "class=OpensearchWatcher error=#{e.class} url=#{@url_without_basicauth} message=#{e.message}"
-        Sentry.capture_exception(e, level: :warning, fingerprint: ["opensearch-unreachable", @url_without_basicauth])
 
         unless @state[:status] == "unreachable"
           @state = @state.merge(status: "unreachable")
