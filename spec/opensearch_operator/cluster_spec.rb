@@ -610,13 +610,14 @@ RSpec.describe OpensearchOperator::Cluster do
       expect(records.size).to eq 1
     end
 
-    it "records it again only when the cluster bootstrapped anew" do
+    it "writes the record on every poll, so a deleted ConfigMap comes back right away, logging new UUIDs" do
       2.times { fake_watcher.poll }
-      expect(records.size).to eq 1
-
       cluster_info["cluster_uuid"] = "w8b1AbYwSdO6cS0Lk_p5Qg"
       fake_watcher.poll
+
       expect(records.map { |record| record.dig("data", "cluster_uuid") })
+        .to eq %w[Q7rVjM5BSnefOwj1a8d2Tw Q7rVjM5BSnefOwj1a8d2Tw w8b1AbYwSdO6cS0Lk_p5Qg]
+      expect(log_output.scan(%r{Recorded the bootstrap of default/example, cluster UUID (\S+)}).flatten)
         .to eq %w[Q7rVjM5BSnefOwj1a8d2Tw w8b1AbYwSdO6cS0Lk_p5Qg]
     end
 

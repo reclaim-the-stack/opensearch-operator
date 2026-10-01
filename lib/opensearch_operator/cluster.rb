@@ -576,18 +576,20 @@ class OpensearchOperator
     end
 
     # Records the UUID of the formed cluster once OpenSearch reports one, so that pods started from then on leave out
-    # cluster.initial_cluster_manager_nodes (see templates/_startup_script.sh.mustache). Recorded once per operator run,
-    # which covers clusters which formed before the operator recorded bootstraps, and again whenever the UUID changes, ie.
-    # the cluster bootstrapped anew.
+    # cluster.initial_cluster_manager_nodes (see templates/_startup_script.sh.mustache). Written on every poll, applying an
+    # unchanged ConfigMap is a no-op and a deleted one comes back right away. It always holds the UUID OpenSearch reports:
+    # after losing all data, polls fail until a new cluster formed, so resetting the bootstrap can't bring back the old one.
     def record_bootstrap
       cluster_uuid = @watcher.client.info.fetch("cluster_uuid")
       # The UUID is _na_ until a cluster manager was elected
-      return if cluster_uuid == "_na_" || cluster_uuid == @recorded_cluster_uuid
+      return if cluster_uuid == "_na_"
 
       bootstrap_configmap = Template["bootstrap_configmap"].render(name:, namespace:, owner_references:, uid:, cluster_uuid:)
       Kubernetes.configmaps.apply(bootstrap_configmap)
-      @recorded_cluster_uuid = cluster_uuid
+      return if cluster_uuid == @recorded_cluster_uuid
+
       LOGGER.info "Recorded the bootstrap of #{namespace}/#{name}, cluster UUID #{cluster_uuid}"
+      @recorded_cluster_uuid = cluster_uuid
     rescue StandardError => e
       Sentry.capture_exception(e)
       LOGGER.error "Failed to record the bootstrap of #{namespace}/#{name}: #{e.class}: #{e.message}"
