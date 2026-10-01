@@ -41,7 +41,11 @@ plugins.security.allow_default_init_securityindex: true
 prometheus.indices: false
 YAML
 
-opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
+# The images built by the operator's CI (ghcr.io/reclaim-the-stack/opensearch) come with the plugins installed, the official
+# images get them on every start
+if [ ! -d plugins/prometheus-exporter ]; then
+  opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
+fi
 
 # If attempting to boot the Performance Analyzer CLI with default config, it just crashes at boot with:
 # Error: Could not find or load main class org.opensearch.performanceanalyzer.PerformanceAnalyzerApp
@@ -50,10 +54,14 @@ opensearch-plugin install https://github.com/opensearch-project/opensearch-prome
 # memory based tmpfs disk at /dev/shm. Performance Analyzer is currently scheduled for deprecation so lets
 # focus on the prometheus metrics based approach instead for now:
 # https://github.com/opensearch-project/performance-analyzer/issues/585
-opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
+if [ -d plugins/opensearch-performance-analyzer ]; then
+  opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
+fi
 
 {{#has_repositories}}
-opensearch-plugin install repository-s3 --silent --batch
+if [ ! -d plugins/repository-s3 ]; then
+  opensearch-plugin install repository-s3 --silent --batch
+fi
 
 # NOTE: repository credentials are added to the opensearch keystore in a separate init container
 if [ -f /tmp/keystore/opensearch.keystore ]; then

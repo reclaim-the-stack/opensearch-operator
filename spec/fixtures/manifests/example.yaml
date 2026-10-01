@@ -186,7 +186,11 @@ spec:
           prometheus.indices: false
           YAML
 
-          opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/3.1.0.0/prometheus-exporter-3.1.0.0.zip
+          # The images built by the operator's CI (ghcr.io/reclaim-the-stack/opensearch) come with the plugins installed, the official
+          # images get them on every start
+          if [ ! -d plugins/prometheus-exporter ]; then
+            opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/3.1.0.0/prometheus-exporter-3.1.0.0.zip
+          fi
 
           # If attempting to boot the Performance Analyzer CLI with default config, it just crashes at boot with:
           # Error: Could not find or load main class org.opensearch.performanceanalyzer.PerformanceAnalyzerApp
@@ -195,7 +199,9 @@ spec:
           # memory based tmpfs disk at /dev/shm. Performance Analyzer is currently scheduled for deprecation so lets
           # focus on the prometheus metrics based approach instead for now:
           # https://github.com/opensearch-project/performance-analyzer/issues/585
-          opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
+          if [ -d plugins/opensearch-performance-analyzer ]; then
+            opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
+          fi
 
 
 

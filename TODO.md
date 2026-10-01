@@ -26,7 +26,6 @@ explore.enabled: true
 
 # Known issues
 
-- Every pod start downloads the prometheus exporter (from GitHub) and repository-s3 plugins, and exporter releases lag OpenSearch releases by days to months. Build an image with the plugins pre-installed instead.
 - No drift repair: reconciliation is skipped once status.observedGeneration matches and owned resources aren't watched, so a deleted Service, ConfigMap, Secret or StatefulSet is never recreated.
 - Replica shard allocation stays disabled ("primaries") if a pod deleted by a rolling restart never comes back.
 - internal_users.yml and roles.yml only seed the security index on first boot, changes to them never reach existing clusters.
@@ -41,6 +40,7 @@ explore.enabled: true
 
 # Maybe?
 
+- Build ghcr.io/reclaim-the-stack/opensearch images for new OpenSearch versions automatically, eg. a scheduled workflow which adds a version once its Prometheus exporter is released.
 - Watch owned resources (StatefulSets, pods, services, secrets) with informer style caches, replacing RollingRestart's polling of the Kubernetes API, triggering ticks on pod changes and repairing drift. The OpenSearch resource watch already streams its initial state and handles resumes, 410s and missed deletions.
 - Should default 40MB max_snapshot_bytes_per_sec / max_restore_bytes_per_sec be configurable to tune per node snapshot speeds?
 - Restore / bootstrap a cluster from a snapshot
