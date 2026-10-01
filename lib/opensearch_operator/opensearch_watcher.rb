@@ -10,7 +10,7 @@ require "opensearch-ruby"
 #   # - :number_of_nodes (Integer)
 #   # - :master (String, node name)
 #   # - :cluster_manager (String, node name)
-#   # - :status (String, "Green", "Yellow", "Red")
+#   # - :status (String, "green", "yellow", "red" or "unreachable")
 #   # - :version (String, OpenSearch version)
 #   puts "State changed: #{changed_keys.join(", ")}"
 #   puts new_state.inspect
@@ -60,14 +60,24 @@ class OpensearchOperator
 
     def watch_loop
       loop do
+        skip_sleep = false
+        # While the cluster is yellow or red the health request waits for it to turn green rather than the loop sleeping,
+        # so rolling restarts and node drains (see Cluster#update_pod_disruption_budget) proceed as soon as it does
+        wait_for_green = %w[yellow red].include?(@state[:status])
+        health =
+          if wait_for_green
+            # Answered with a 408 when the cluster didn't turn green within the timeout
+            client.cluster.health(wait_for_status: "green", timeout: "#{CHECK_INTERVAL}s", ignore: 408)
+          else
+            client.cluster.health
+          end
+        status = health["status"]
+
         nodes = client.cat.nodes(h: "name,cluster_manager,master,version", format: "json")
         number_of_nodes = nodes.length
         master = nodes.find { |n| n["master"] == "*" }&.fetch("name")
         cluster_manager = nodes.find { |n| n["cluster_manager"] == "*" }&.fetch("name")
         version = (nodes.find { |n| n["master"] == "*" } || nodes.first)&.fetch("version")
-
-        health = client.cluster.health
-        status = health["status"]
 
         new_state = { number_of_nodes:, master:, cluster_manager:, status:, version: }
 
@@ -92,6 +102,9 @@ class OpensearchOperator
             LOGGER.error "class=OpensearchWatcher action=on-poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
           end
         end
+
+        # Only a complete poll skips the sleep, a poll which keeps failing after the health request mustn't spin
+        skip_sleep = wait_for_green
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
         # An unreachable cluster is expected at times (bootstrapping, full outage) so we report it as a warning
         # rather than an error to stay out of alerting, and surface it via the status instead.
@@ -107,7 +120,7 @@ class OpensearchOperator
         Sentry.capture_exception(e)
         LOGGER.error "class=OpensearchWatcher action=poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
       ensure
-        sleep CHECK_INTERVAL
+        sleep CHECK_INTERVAL unless skip_sleep
       end
     end
   end

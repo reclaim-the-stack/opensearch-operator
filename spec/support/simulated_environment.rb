@@ -6,7 +6,8 @@
 class SimulatedEnvironment
   EXCLUDE_SETTING = "cluster.routing.allocation.exclude._name"
 
-  attr_accessor :update_revision, :status, :unassigned_primaries, :new_pods_pending, :on_voting_exclusion, :voting_exclusions
+  attr_accessor :update_revision, :status, :unassigned_primaries, :new_pods_pending, :on_voting_exclusion, :on_pod_delete,
+    :voting_exclusions
   attr_reader :statefulset_replicas, :generation, :observed_generation, :pods, :persistent, :transient, :shards, :calls,
     :stuck_terminating, :violations
 
@@ -145,6 +146,7 @@ class SimulatedEnvironment
       pods.define_singleton_method(:list) { |namespace:, params:| { "items" => environment.pods } }
       pods.define_singleton_method(:delete) do |name, namespace:|
         environment.calls << "DELETE pod #{name}"
+        environment.on_pod_delete&.call
         environment.pod(environment.ordinal(name))["metadata"]["deletionTimestamp"] = "now"
       end
     end

@@ -467,6 +467,10 @@ module Kubernetes
       @events ||= Resource.new("events")
     end
 
+    def pod_disruption_budgets
+      @pod_disruption_budgets ||= Resource.new("poddisruptionbudgets", group: "policy")
+    end
+
     def pods
       @pods ||= Resource.new("pods")
     end

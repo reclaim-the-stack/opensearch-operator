@@ -215,6 +215,26 @@ RSpec.describe OpensearchOperator::RollingRestart do
         .to eq %w[RollingRestartStarted PodRestarted PodRestarted PodRestarted RollingRestartCompleted]
     end
 
+    it "reports a restart before deleting the pod, so the PodDisruptionBudget allows no evictions by then" do
+      phases_at_deletion = []
+      @environment.on_pod_delete = -> { phases_at_deletion << @cluster.phases.last }
+
+      run_ticks(@rolling_restart, 5)
+
+      expect(phases_at_deletion.size).to eq 3
+      expect(phases_at_deletion).to all(start_with("Rolling restart: restarting"))
+    end
+
+    it "reports the restart of a pod which left the cluster before deleting it too" do
+      @environment.kill(1)
+      phases_at_deletion = []
+      @environment.on_pod_delete = -> { phases_at_deletion << @cluster.phases.last }
+
+      run_ticks(@rolling_restart, 1)
+
+      expect(phases_at_deletion).to eq ["Rolling restart: restarting opensearch-demo-1 (2 pods remaining)"]
+    end
+
     it "doesn't restart pods while the cluster is red" do
       @environment.status = "red"
 

@@ -224,13 +224,14 @@ class OpensearchOperator
 
         if stuck_pod
           stuck_pod_name = stuck_pod.dig("metadata", "name")
+          # Reported first, so the PodDisruptionBudget allows no evictions by the time the pod is gone
+          @cluster.update_phase("Rolling restart: restarting #{stuck_pod_name} (#{stale_pods.size - 1} pods remaining)")
           Kubernetes.pods.delete(stuck_pod_name, namespace: @cluster.namespace)
           @cluster.emit_event(
             "PodRestarted",
             "Deleted unavailable pod #{stuck_pod_name} (revision #{stuck_pod.dig('metadata', 'labels', 'controller-revision-hash')}) " \
             "which is not part of the cluster, #{stale_pods.size - 1} pods remaining",
           )
-          @cluster.update_phase("Rolling restart: restarting #{stuck_pod_name} (#{stale_pods.size - 1} pods remaining)")
         elsif @in_progress
           waiting_for = unavailable_pod_names.any? ? unavailable_pod_names.sort.join(", ") : "#{health.fetch('number_of_nodes')}/#{replicas} nodes"
           @cluster.update_phase("Rolling restart: waiting for #{waiting_for} to join the cluster (#{stale_pods.size} pods remaining)")
@@ -348,15 +349,16 @@ class OpensearchOperator
       @client.cluster.put_settings(body: { persistent: { ALLOCATION_SETTING => "primaries" } })
       # Not strictly required (OpenSearch flushes on graceful shutdown) but optimizes terminate -> recovery, same as ECK does
       @client.indices.flush
+      remaining = stale_pods.size - 1
+      # Reported first, so the PodDisruptionBudget allows no evictions by the time the pod is gone
+      @cluster.update_phase("Rolling restart: restarting #{pod_name} (#{remaining} pods remaining)")
       Kubernetes.pods.delete(pod_name, namespace: @cluster.namespace)
 
-      remaining = stale_pods.size - 1
       @cluster.emit_event(
         "PodRestarted",
         "Deleted pod #{pod_name} (revision #{pod_revision}) after disabling replica shard allocation and flushing, " \
         "#{remaining} pods remaining#{pod_name == cluster_manager ? ' (this was the cluster manager)' : ''}",
       )
-      @cluster.update_phase("Rolling restart: restarting #{pod_name} (#{remaining} pods remaining)")
       false
     end
   end

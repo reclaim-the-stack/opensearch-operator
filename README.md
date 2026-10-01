@@ -31,6 +31,7 @@ Notable features:
 - Intelligent JVM heap management (50% of available RAM up to a cap of 31GB to avoid compressed oops)
 - Health gated rolling restarts: pods are restarted one at a time, waiting for green cluster health in between (see below)
 - Safe scale downs: shards and cluster manager votes are migrated off leaving nodes before their pods are removed (see below)
+- Health aware PodDisruptionBudget: node drains evict one pod at a time, waiting for green cluster health in between (see below)
 
 Notable limitations:
 - No functionality to create custom users and roles
@@ -81,6 +82,14 @@ Rolling restarts wait for an ongoing scale down to finish. Raising the replicas 
 The remaining nodes need room for all shards. The scale down waits for as long as shards can't be moved, eg. when an index has more replicas than the remaining nodes can hold or disk watermarks are exceeded (`GET _cluster/allocation/explain` tells why).
 
 The operator manages `cluster.routing.allocation.exclude._name` and the voting configuration exclusions, so don't use them to drain nodes by hand (`cluster.routing.allocation.exclude._ip` works).
+
+## Node drains
+
+Each cluster has a PodDisruptionBudget, `opensearch-<name>`, which the operator keeps up to date. Node drains, eg. during Kubernetes or OS upgrades, may evict one OpenSearch pod while the cluster is green and no rolling restart or scaling is in progress, and none otherwise. Evicting a pod while the cluster is yellow could take the only copy of a shard offline.
+
+So a drain of the next node waits until the cluster has recovered from the previous one, ie. until the evicted node's shards are assigned again. While the cluster isn't green the operator waits for it to turn green rather than polling, so the next eviction is allowed within about a second.
+
+A cluster which stays yellow, eg. because an index has more replicas than the nodes can hold, blocks drains until it's fixed. Drains retry blocked evictions until their own timeout (eg. `kubectl drain --timeout`). To wait for a cluster before draining the next node: `kubectl wait --for=jsonpath='{.status.disruptionsAllowed}'=1 pdb/opensearch-<name> --timeout=30m`.
 
 ## Status
 

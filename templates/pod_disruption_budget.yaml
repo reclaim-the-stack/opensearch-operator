@@ -1,0 +1,19 @@
+# Lets node drains evict one OpenSearch pod at a time, only while the cluster is green and settled (see
+# Cluster#update_pod_disruption_budget)
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensearch-%{name}
+  namespace: %{namespace}
+  labels:
+    app.kubernetes.io/managed-by: opensearch-operator
+    app.kubernetes.io/name: opensearch
+    opensearch.reclaim-the-stack.com/cluster: %{name}
+  ownerReferences: %{owner_references}
+spec:
+  maxUnavailable: %{max_unavailable}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch
+      opensearch.reclaim-the-stack.com/cluster: %{name}
