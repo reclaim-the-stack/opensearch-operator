@@ -116,6 +116,8 @@ class OpensearchOperator
       snapshot_repositories_failures = 0
       @watcher.on_poll do |health, nodes|
         settled = rolling_restart.tick(health, nodes)
+        # Status updates follow changes, this retries a failed update of the PodDisruptionBudget or the conditions
+        patch_status
 
         if settled && @snapshot_repositories_upsert_due_at&.past?
           # Cleared up front so that a spec change arriving in the meantime triggers another upsert
@@ -544,10 +546,12 @@ class OpensearchOperator
     end
 
     # Patches the given status fields along with the conditions if they changed, which a merge patch replaces as a whole.
-    # Returns whether the patch succeeded.
+    # Also keeps the PodDisruptionBudget, which depends on the same state, up to date. Returns whether the patch succeeded.
     def patch_status(fields = {})
       @status_mutex.synchronize do
-        new_conditions = conditions(phase: fields.fetch(:phase, @phase))
+        phase = fields.fetch(:phase, @phase)
+        update_pod_disruption_budget(phase)
+        new_conditions = conditions(phase:)
         conditions_changed = new_conditions != published_conditions
         return true if fields.empty? && !conditions_changed
 
@@ -560,6 +564,27 @@ class OpensearchOperator
       Sentry.capture_exception(e)
       LOGGER.error "Failed to update the status of #{namespace}/#{name}: #{e.class}: #{e.message}"
       false
+    end
+
+    # Node drains may evict one OpenSearch pod while the cluster is green and no rolling restart or scaling is in
+    # progress, and none otherwise: evicting a pod of a yellow cluster could take the only copy of a shard offline, and an
+    # eviction during a rolling restart or a scale down would take down a second pod. Applied when the number of allowed
+    # evictions changes, and kept until the health and the phase are known, eg. after an operator restart.
+    def update_pod_disruption_budget(phase)
+      health = @watcher&.state&.dig(:status)
+      return if health.nil? || phase.nil? || phase == "Deleting"
+
+      settled = phase == "Running" && @evaluated_statefulset_generation.to_i >= @applied_statefulset_generation.to_i
+      max_unavailable = health == "green" && settled ? 1 : 0
+      return if max_unavailable == @pod_disruption_budget_max_unavailable
+
+      pod_disruption_budget = Template["pod_disruption_budget"].render(name:, namespace:, owner_references:, max_unavailable:)
+      Kubernetes.pod_disruption_budgets.apply(pod_disruption_budget)
+      @pod_disruption_budget_max_unavailable = max_unavailable
+      LOGGER.info "PodDisruptionBudget of #{namespace}/#{name} allows #{max_unavailable} evictions"
+    rescue StandardError => e
+      Sentry.capture_exception(e)
+      LOGGER.error "Failed to update the PodDisruptionBudget of #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
 
     # The Reconciled and Ready conditions (standard metav1.Condition fields) for `kubectl wait --for=condition=Ready` and

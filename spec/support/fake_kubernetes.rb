@@ -46,6 +46,7 @@ class FakeKubernetes
   def configmaps = @configmaps ||= Resource.new(:configmaps, @applied)
   def services = @services ||= Resource.new(:services, @applied)
   def deployments = @deployments ||= Resource.new(:deployments, @applied)
+  def pod_disruption_budgets = @pod_disruption_budgets ||= Resource.new(:pod_disruption_budgets, @applied)
 
   def statefulsets
     fake = self
@@ -92,7 +93,7 @@ module FakeKubernetesHelpers
     @fake_kubernetes ||= FakeKubernetes.new.tap do |fake|
       allow(Kubernetes).to receive_messages(
         secrets: fake.secrets, configmaps: fake.configmaps, services: fake.services, deployments: fake.deployments,
-        statefulsets: fake.statefulsets, events: fake.event_resource
+        statefulsets: fake.statefulsets, pod_disruption_budgets: fake.pod_disruption_budgets, events: fake.event_resource
       )
       allow(OpensearchOperator::CLUSTERS_RESOURCE).to receive(:patch) do |_name, namespace:, subresource: nil, params: {}|
         fake.patch_status(params)

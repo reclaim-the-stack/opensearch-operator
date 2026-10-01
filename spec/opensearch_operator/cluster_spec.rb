@@ -5,6 +5,12 @@ RSpec.describe OpensearchOperator::Cluster do
 
   let(:manifest) { cluster_manifest }
 
+  # What a tick of the rolling restart does: report the StatefulSet generation it read, then its phase
+  def tick(phase, statefulset_generation: fake_kubernetes.statefulset_generation)
+    cluster.evaluated_statefulset_generation = statefulset_generation
+    cluster.update_phase(phase)
+  end
+
   describe "#name" do
     it "returns the name from metadata" do
       expect(cluster.name).to eq "example"
@@ -347,12 +353,6 @@ RSpec.describe OpensearchOperator::Cluster do
       travel_to Time.utc(2026, 9, 30, 12)
     end
 
-    # What a tick of the rolling restart does: report the StatefulSet generation it read, then its phase
-    def tick(phase, statefulset_generation: fake_kubernetes.statefulset_generation)
-      cluster.evaluated_statefulset_generation = statefulset_generation
-      cluster.update_phase(phase)
-    end
-
     def condition(type) = fake_kubernetes.condition(type)
     def summary(type) = condition(type)&.values_at("status", "reason", "observedGeneration")
 
@@ -571,6 +571,80 @@ RSpec.describe OpensearchOperator::Cluster do
         expect(fake_kubernetes.events).to be_empty
         expect(fake_kubernetes.status_patches).to be_empty
       end
+    end
+  end
+
+  describe "pod disruption budget" do
+    let(:rolling_restart) { instance_double(OpensearchOperator::RollingRestart, tick: false) }
+
+    before do
+      fake_kubernetes
+      fake_watcher
+      allow(OpensearchOperator::RollingRestart).to receive(:new).and_return(rolling_restart)
+      cluster.reconsile
+    end
+
+    def budgets = fake_kubernetes.applied[:pod_disruption_budgets]
+    def applied_max_unavailable = budgets.map { |budget| budget.dig("spec", "maxUnavailable") }
+
+    it "allows one eviction once the cluster is green and settled, and waits until both are known" do
+      fake_watcher.report("green")
+      expect(budgets).to be_empty
+
+      tick("Running")
+      expect(budgets.last["metadata"]).to include("name" => "opensearch-example", "namespace" => "default")
+      expect(budgets.last.dig("metadata", "ownerReferences", 0)).to include("kind" => "OpenSearch", "uid" => cluster.uid)
+      pod_labels = { "app.kubernetes.io/name" => "opensearch", "opensearch.reclaim-the-stack.com/cluster" => "example" }
+      expect(budgets.last["spec"]).to eq("maxUnavailable" => 1, "selector" => { "matchLabels" => pod_labels })
+    end
+
+    it "allows none while the cluster isn't green, applying only changes" do
+      fake_watcher.report("green")
+      tick("Running")
+      %w[yellow green red unreachable green].each { |health| fake_watcher.report(health) }
+
+      expect(applied_max_unavailable).to eq [1, 0, 1, 0, 1]
+    end
+
+    it "allows none during rolling restarts and scaling" do
+      fake_watcher.report("green")
+      tick("Running")
+      tick("Rolling restart: restarting opensearch-example-2 (2 pods remaining)")
+      tick("Rolling restart: waiting for opensearch-example-2 to join the cluster (2 pods remaining)")
+      tick("Running")
+      tick("Scaling up from 3 to 4 pods")
+
+      expect(applied_max_unavailable).to eq [1, 0, 1, 0]
+    end
+
+    it "allows none after a reconciliation changed the StatefulSet, until the rolling restart works with it" do
+      fake_watcher.report("green")
+      tick("Running")
+      fake_kubernetes.statefulset_generation = 2
+      cluster.update(cluster_manifest(generation: 2))
+      expect(applied_max_unavailable).to eq [1, 0]
+
+      tick("Running")
+      expect(applied_max_unavailable).to eq [1, 0, 1]
+    end
+
+    it "leaves the budget of a cluster being deleted alone" do
+      fake_watcher.report("green")
+      tick("Running")
+      cluster.update_phase("Deleting")
+
+      expect(applied_max_unavailable).to eq [1]
+    end
+
+    it "retries a failed update on the next poll" do
+      allow(fake_kubernetes.pod_disruption_budgets).to receive(:apply).and_raise(Kubernetes::Error, "Apply failed: 503")
+      fake_watcher.report("green")
+      tick("Running")
+      expect(log_output).to include "PodDisruptionBudget of default/example: Kubernetes::Error: Apply failed: 503"
+
+      allow(fake_kubernetes.pod_disruption_budgets).to receive(:apply).and_call_original
+      fake_watcher.poll
+      expect(applied_max_unavailable).to eq [1]
     end
   end
 end

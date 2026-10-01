@@ -10,7 +10,7 @@ require "opensearch-ruby"
 #   # - :number_of_nodes (Integer)
 #   # - :master (String, node name)
 #   # - :cluster_manager (String, node name)
-#   # - :status (String, "Green", "Yellow", "Red")
+#   # - :status (String, "green", "yellow", "red" or "unreachable")
 #   # - :version (String, OpenSearch version)
 #   puts "State changed: #{changed_keys.join(", ")}"
 #   puts new_state.inspect
@@ -60,14 +60,23 @@ class OpensearchOperator
 
     def watch_loop
       loop do
+        # While the cluster is yellow or red the health request waits for it to turn green rather than the loop sleeping,
+        # so rolling restarts and node drains (see Cluster#update_pod_disruption_budget) proceed as soon as it does
+        waited_for_green = false
+        if %w[yellow red].include?(@state[:status])
+          # Answered with a 408 when the cluster didn't turn green within the timeout
+          health = client.cluster.health(wait_for_status: "green", timeout: "#{CHECK_INTERVAL}s", ignore: 408)
+          waited_for_green = true
+        else
+          health = client.cluster.health
+        end
+        status = health["status"]
+
         nodes = client.cat.nodes(h: "name,cluster_manager,master,version", format: "json")
         number_of_nodes = nodes.length
         master = nodes.find { |n| n["master"] == "*" }&.fetch("name")
         cluster_manager = nodes.find { |n| n["cluster_manager"] == "*" }&.fetch("name")
         version = (nodes.find { |n| n["master"] == "*" } || nodes.first)&.fetch("version")
-
-        health = client.cluster.health
-        status = health["status"]
 
         new_state = { number_of_nodes:, master:, cluster_manager:, status:, version: }
 
@@ -107,7 +116,7 @@ class OpensearchOperator
         Sentry.capture_exception(e)
         LOGGER.error "class=OpensearchWatcher action=poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
       ensure
-        sleep CHECK_INTERVAL
+        sleep CHECK_INTERVAL unless waited_for_green
       end
     end
   end

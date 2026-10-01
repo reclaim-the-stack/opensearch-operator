@@ -37,7 +37,6 @@ class OpensearchOperator
     version: "v1alpha1",
   )
   DEFAULT_OPERATOR_NAMESPACE = "opensearch-operator"
-  HEALTH_POLL_INTERVAL = 15
 
   # Lazily create or fetch the singleton metrics user password. The password is unique per
   # installation of the operator, but shared across all OpenSearch clusters managed by it.
