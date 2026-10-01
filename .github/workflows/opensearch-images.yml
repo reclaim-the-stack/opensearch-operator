@@ -11,6 +11,11 @@ on:
       - images/opensearch/**
       - .github/workflows/opensearch-images.yml
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Rebuild and push the versions which are already published
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -41,8 +46,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A published version isn't pushed again unless a manual run asks for it, so a tag always refers to the same build
+      - name: Check whether the version is published
+        id: published
+        if: github.event_name != 'pull_request' && !inputs.rebuild
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/${{ github.repository_owner }}/opensearch:${{ matrix.opensearch_version }}" > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # Pull requests only build, pushes to master also publish
       - name: Build and push
+        if: steps.published.outputs.published != 'true'
         uses: docker/build-push-action@v6
         with:
           context: images/opensearch

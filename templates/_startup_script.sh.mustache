@@ -43,8 +43,7 @@ YAML
 
 # The images built by the operator's CI (ghcr.io/reclaim-the-stack/opensearch) come with the plugins installed, the official
 # images get them on every start
-INSTALLED_PLUGINS=$(opensearch-plugin list)
-if ! echo "$INSTALLED_PLUGINS" | grep -qx prometheus-exporter; then
+if [ ! -d plugins/prometheus-exporter ]; then
   opensearch-plugin install https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/{{prometheus_exporter_version}}/prometheus-exporter-{{prometheus_exporter_version}}.zip
 fi
 
@@ -55,12 +54,12 @@ fi
 # memory based tmpfs disk at /dev/shm. Performance Analyzer is currently scheduled for deprecation so lets
 # focus on the prometheus metrics based approach instead for now:
 # https://github.com/opensearch-project/performance-analyzer/issues/585
-if echo "$INSTALLED_PLUGINS" | grep -qx opensearch-performance-analyzer; then
-  opensearch-plugin remove opensearch-performance-analyzer
+if [ -d plugins/opensearch-performance-analyzer ]; then
+  opensearch-plugin remove opensearch-performance-analyzer || echo "ignoring failed performance analyzer plugin removal"
 fi
 
 {{#has_repositories}}
-if ! echo "$INSTALLED_PLUGINS" | grep -qx repository-s3; then
+if [ ! -d plugins/repository-s3 ]; then
   opensearch-plugin install repository-s3 --silent --batch
 fi
 
