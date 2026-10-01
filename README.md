@@ -59,7 +59,7 @@ TODO: add comprehensive documentation.
 
 `spec.image` can be any OpenSearch image. With the official images (`opensearchproject/opensearch`) the startup script installs the Prometheus exporter on every start, and the `repository-s3` plugin when snapshot repositories are configured. A pod then can't start while GitHub or OpenSearch's artifact server is unreachable. The exporter is also released for each OpenSearch version separately, often days or weeks after it, so upgrading to a version without one leaves the first restarted pod crashing.
 
-`ghcr.io/reclaim-the-stack/opensearch:<version>` comes with those plugins installed, so its pods start without downloading anything. CI builds it for the versions listed in `.github/workflows/opensearch-images.yml`, currently 3.8.0, and a version can only be built once its exporter is released. Upgrade the operator to 0.15.0 or later before switching to it, earlier versions fail to install the plugins a second time.
+`ghcr.io/reclaim-the-stack/opensearch:<version>` comes with those plugins installed, so its pods start without downloading anything. `ghcr.io/reclaim-the-stack/opensearch:3.8.0` is the default: a cluster without `spec.image` gets the default of the installed CRD, so upgrading the operator can upgrade OpenSearch too. Set `spec.image` to decide when to upgrade instead. CI builds it for the versions listed in `.github/workflows/opensearch-images.yml`, currently 3.8.0, and a version can only be built once its exporter is released. Upgrade the operator to 0.15.0 or later before switching to it, earlier versions fail to install the plugins a second time.
 
 ## Bootstrapping
 
