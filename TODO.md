@@ -26,7 +26,6 @@ explore.enabled: true
 
 # Known issues
 
-- New clusters never bootstrap if their pods start more than 5 minutes after the OpenSearch resource was created (the cluster.initial_cluster_manager_nodes heuristic in the startup script). Better: record bootstrap completion, eg. in a mounted ConfigMap, and only set it until then.
 - Every pod start downloads the prometheus exporter (from GitHub) and repository-s3 plugins, and exporter releases lag OpenSearch releases by days to months. Build an image with the plugins pre-installed instead.
 - No drift repair: reconciliation is skipped once status.observedGeneration matches and owned resources aren't watched, so a deleted Service, ConfigMap, Secret or StatefulSet is never recreated.
 - Replica shard allocation stays disabled ("primaries") if a pod deleted by a rolling restart never comes back.

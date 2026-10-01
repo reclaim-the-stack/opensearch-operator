@@ -55,6 +55,12 @@ Look at the example files to understand the CRD structure.
 
 TODO: add comprehensive documentation.
 
+## Bootstrapping
+
+A new cluster bootstraps, ie. elects its first cluster manager, on its first start, however long its pods take to start (eg. while nodes are added or images pulled). Once it has formed, the operator records its UUID in the ConfigMap `opensearch-<name>-bootstrap`, and nodes started from then on don't bootstrap any more. A node without data which started while no cluster manager was reachable would otherwise form a second, empty cluster.
+
+So pods of a cluster which lost the data of all its nodes wait for the cluster that's gone rather than forming a new, empty one. To start over with an empty cluster, delete the ConfigMap and then the pods. The operator records the new cluster once it has formed.
+
 ## Rolling restarts
 
 The StatefulSet uses the `OnDelete` update strategy, so Kubernetes never restarts pods on its own when the pod template changes (version upgrade, resource changes, new snapshot repositories etc). Instead the operator restarts pods one at a time following the [OpenSearch rolling upgrade procedure](https://docs.opensearch.org/latest/migrate-or-upgrade/rolling-upgrade/):

@@ -1,3 +1,8 @@
+# frozen_string_literal: true
+
+require "open3"
+require "tmpdir"
+
 RSpec.describe OpensearchOperator::Template do
   it "renders mustache template" do
     template = OpensearchOperator::Template.new("spec/fixtures/templates/test.sh.mustache")
@@ -21,6 +26,7 @@ RSpec.describe OpensearchOperator::Template do
     template = OpensearchOperator::Template.new("templates/statefulset.yaml.mustache")
 
     rendered = template.render(
+      bootstrap_path: "/tmp/bootstrap",
       disk_size: "10Gi",
       has_repositories: true,
       heap_size: "5g",
@@ -71,5 +77,45 @@ RSpec.describe OpensearchOperator::Template do
         ],
       },
     )
+  end
+
+  describe "the startup script" do
+    let(:bootstrap_path) { Dir.mktmpdir }
+
+    after { FileUtils.remove_entry(bootstrap_path) }
+
+    # Runs the part of the startup script which decides whether the node may bootstrap a new cluster, as bash -e like the
+    # container does
+    def initial_cluster_manager_nodes
+      script = OpensearchOperator::Template["_startup_script"].render(
+        bootstrap_path:, config_yaml_string: nil, has_repositories: false, name: "example", namespace: "default",
+        prometheus_exporter_version: "3.5.0.0", repositories: [], uid: "123e4567-e89b-12d3-a456-426614174000"
+      )
+      bootstrap_part = script.split("\n# Seed hosts").first
+      output, status = Open3.capture2e("bash", "-e", "-c", "#{bootstrap_part}\necho \"nodes=$INITIAL_CLUSTER_MANAGER_NODES\"")
+      expect(status).to be_success, output
+      output[/^nodes=(.*)$/, 1]
+    end
+
+    def record_bootstrap(resource_uid)
+      File.write(File.join(bootstrap_path, "resource_uid"), resource_uid)
+      File.write(File.join(bootstrap_path, "cluster_uuid"), "Q7rVjM5BSnefOwj1a8d2Tw")
+    end
+
+    it "lets pod 0 bootstrap a cluster which hasn't bootstrapped yet" do
+      expect(initial_cluster_manager_nodes).to eq '"opensearch-example-0"'
+    end
+
+    it "keeps the nodes of a bootstrapped cluster from bootstrapping another one" do
+      record_bootstrap("123e4567-e89b-12d3-a456-426614174000")
+
+      expect(initial_cluster_manager_nodes).to eq ""
+    end
+
+    it "ignores the bootstrap of an earlier resource with the same name" do
+      record_bootstrap("00000000-0000-0000-0000-000000000000")
+
+      expect(initial_cluster_manager_nodes).to eq '"opensearch-example-0"'
+    end
   end
 end

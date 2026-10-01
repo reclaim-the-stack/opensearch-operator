@@ -207,7 +207,10 @@ RSpec.describe OpensearchOperator::Cluster do
       repositories = repository_names.map { |name| { "name" => name, "bucket" => "bucket-#{name}", "policies" => policies } }
       cluster_manifest(snapshotRepositories: repositories)
     end
-    let(:watcher) { fake_watcher(client: Struct.new(:snapshot, :http).new(snapshot, http)) }
+    let(:watcher) do
+      info = { "cluster_uuid" => "Q7rVjM5BSnefOwj1a8d2Tw" }
+      fake_watcher(client: Struct.new(:snapshot, :http, :info).new(snapshot, http, info))
+    end
     let(:rolling_restart) { instance_double(OpensearchOperator::RollingRestart, tick: true) }
 
     before do
@@ -571,6 +574,62 @@ RSpec.describe OpensearchOperator::Cluster do
         expect(fake_kubernetes.events).to be_empty
         expect(fake_kubernetes.status_patches).to be_empty
       end
+    end
+  end
+
+  describe "bootstrap" do
+    let(:cluster_info) { { "cluster_uuid" => "Q7rVjM5BSnefOwj1a8d2Tw" } }
+    let(:rolling_restart) { instance_double(OpensearchOperator::RollingRestart, tick: false) }
+
+    before do
+      fake_kubernetes
+      fake_watcher(client: Struct.new(:info).new(cluster_info))
+      allow(OpensearchOperator::RollingRestart).to receive(:new).and_return(rolling_restart)
+      cluster.reconsile
+    end
+
+    def records
+      fake_kubernetes.applied[:configmaps].select { |manifest| manifest.dig("metadata", "name").end_with?("-bootstrap") }
+    end
+
+    it "records the UUID of the formed cluster for the startup script of its pods" do
+      fake_watcher.poll
+
+      expect(records.size).to eq 1
+      expect(records.last["data"]).to eq("cluster_uuid" => "Q7rVjM5BSnefOwj1a8d2Tw", "resource_uid" => cluster.uid)
+      expect(records.last.dig("metadata", "ownerReferences", 0)).to include("kind" => "OpenSearch", "uid" => cluster.uid)
+    end
+
+    it "waits until the cluster has formed" do
+      cluster_info["cluster_uuid"] = "_na_"
+      fake_watcher.poll
+      expect(records).to be_empty
+
+      cluster_info["cluster_uuid"] = "Q7rVjM5BSnefOwj1a8d2Tw"
+      fake_watcher.poll
+      expect(records.size).to eq 1
+    end
+
+    it "writes the record on every poll, so a deleted ConfigMap comes back right away, logging new UUIDs" do
+      2.times { fake_watcher.poll }
+      cluster_info["cluster_uuid"] = "w8b1AbYwSdO6cS0Lk_p5Qg"
+      fake_watcher.poll
+
+      expect(records.map { |record| record.dig("data", "cluster_uuid") })
+        .to eq %w[Q7rVjM5BSnefOwj1a8d2Tw Q7rVjM5BSnefOwj1a8d2Tw w8b1AbYwSdO6cS0Lk_p5Qg]
+      expect(log_output.scan(%r{Recorded the bootstrap of default/example, cluster UUID (\S+)}).flatten)
+        .to eq %w[Q7rVjM5BSnefOwj1a8d2Tw w8b1AbYwSdO6cS0Lk_p5Qg]
+    end
+
+    it "retries a failure on the next poll, without holding up the rolling restart" do
+      allow(fake_kubernetes.configmaps).to receive(:apply).and_raise(Kubernetes::Error, "Apply failed: 503")
+      fake_watcher.poll
+      expect(rolling_restart).to have_received(:tick)
+      expect(log_output).to include "Failed to record the bootstrap of default/example: Kubernetes::Error: Apply failed: 503"
+
+      allow(fake_kubernetes.configmaps).to receive(:apply).and_call_original
+      fake_watcher.poll
+      expect(records.size).to eq 1
     end
   end
 
