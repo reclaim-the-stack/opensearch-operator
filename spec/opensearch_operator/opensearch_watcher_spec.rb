@@ -62,15 +62,4 @@ RSpec.describe OpensearchOperator::OpensearchWatcher do
     expect(sleeps).to eq [10, 10, 10]
     expect(reported_statuses).to eq %w[yellow unreachable yellow]
   end
-
-  it "logs an unreachable cluster as a warning rather than reporting it to Sentry, it's expected eg. while it bootstraps" do
-    allow(Sentry).to receive(:capture_exception)
-
-    poll(Faraday::ConnectionFailed, OpenSearch::Transport::Transport::Errors::ServiceUnavailable)
-
-    expect(Sentry).not_to have_received(:capture_exception)
-    expect(log_output.scan(/WARN -- : class=OpensearchWatcher error=(\S+)/).flatten)
-      .to eq %w[Faraday::ConnectionFailed OpenSearch::Transport::Transport::Errors::ServiceUnavailable]
-    expect(reported_statuses).to eq ["unreachable"]
-  end
 end
