@@ -63,7 +63,7 @@ TODO: add comprehensive documentation.
 
 ## Configuration
 
-`spec.config` is added to `opensearch.yml`, in flat (`indices.query.bool.max_clause_count: 4096`) or nested YAML form. The settings the operator writes itself (eg. `cluster.name`, `network.host`, `node.name`, `discovery.seed_hosts`, the transport TLS settings and the `s3.client.<repository>.*` settings of snapshot repositories) can't be set there: the reconciliation fails, without touching the pods, and the Reconciled condition names them.
+`spec.config` is added to `opensearch.yml`, in flat (`indices.query.bool.max_clause_count: 4096`) or nested YAML form. The settings the operator depends on (eg. `cluster.name`, `network.host`, `node.name`, `discovery.seed_hosts`, the transport TLS certificates and the `s3.client.<repository>.*` settings of snapshot repositories) can't be set there: the reconciliation fails before applying anything, and the Reconciled condition names them. The operator's defaults for `prometheus.indices` and the transport `enforce_hostname_verification` and `resolve_hostname` settings can be overridden.
 
 ## Bootstrapping
 

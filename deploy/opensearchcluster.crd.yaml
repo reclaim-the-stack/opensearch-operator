@@ -111,7 +111,7 @@ spec:
                         type: string
                 config:
                   type: object
-                  description: Additional OpenSearch configuration merged into config/opensearch.yml.
+                  description: Additional OpenSearch configuration merged into config/opensearch.yml. Settings the operator manages, eg. cluster.name or network.host, are rejected, see the Configuration section of the README.
                   x-kubernetes-preserve-unknown-fields: true
                 snapshotRepositories:
                   type: array

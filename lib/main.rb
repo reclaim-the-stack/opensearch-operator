@@ -106,7 +106,7 @@ class OpensearchOperator
     rescue StandardError => e
       # One failing cluster must neither take down the operator nor stall the events of the other clusters. Its events
       # are handled again on the next change or watch resync (see Kubernetes::WATCH_RESYNC_INTERVAL).
-      Sentry.capture_exception(e)
+      Sentry.capture_exception(e) unless e.is_a?(Cluster::InvalidSpec)
       LOGGER.error "Failed to handle #{type} event for #{namespace}/#{name}: #{e.class}: #{e.message}"
     end
   end

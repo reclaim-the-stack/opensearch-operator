@@ -24,8 +24,12 @@ cat >> config/opensearch.yml <<'YAML'
 plugins.security.ssl.transport.pemcert_filepath: certs/node.crt
 plugins.security.ssl.transport.pemkey_filepath: certs/node.key
 plugins.security.ssl.transport.pemtrustedcas_filepath: certs/ca.crt
+{{^configured_hostname_verification}}
 plugins.security.ssl.transport.enforce_hostname_verification: false
+{{/configured_hostname_verification}}
+{{^configured_resolve_hostname}}
 plugins.security.ssl.transport.resolve_hostname: false
+{{/configured_resolve_hostname}}
 
 plugins.security.ssl.http.enabled: false
 
@@ -37,8 +41,10 @@ plugins.security.nodes_dn:
 
 plugins.security.allow_default_init_securityindex: true
 
+{{^configured_prometheus_indices}}
 # Disable index-level metrics to avoid high-cardinality labels in Prometheus
 prometheus.indices: false
+{{/configured_prometheus_indices}}
 YAML
 
 # The images built by the operator's CI (ghcr.io/reclaim-the-stack/opensearch) come with the plugins installed, the official

@@ -88,7 +88,9 @@ RSpec.describe OpensearchOperator::Template do
     # container does
     def initial_cluster_manager_nodes
       script = OpensearchOperator::Template["_startup_script"].render(
-        bootstrap_path:, config_yaml_string: nil, has_repositories: false, name: "example", namespace: "default",
+        bootstrap_path:, config_yaml_string: nil, configured_hostname_verification: false,
+        configured_prometheus_indices: false, configured_resolve_hostname: false, has_repositories: false, name: "example",
+        namespace: "default",
         prometheus_exporter_version: "3.5.0.0", repositories: [], uid: "123e4567-e89b-12d3-a456-426614174000"
       )
       bootstrap_part = script.split("\n# Seed hosts").first
