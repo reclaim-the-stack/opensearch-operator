@@ -156,6 +156,7 @@ class SimulatedEnvironment
     environment = self
     cluster = Object.new
     cluster.define_singleton_method(:get_settings) do |flat_settings:|
+      environment.calls << "GET _cluster/settings"
       { "persistent" => environment.persistent.dup, "transient" => environment.transient.dup }
     end
     cluster.define_singleton_method(:put_settings) do |body:|

@@ -272,6 +272,34 @@ RSpec.describe OpensearchOperator::RollingRestart do
       expect(@environment.persistent).not_to have_key(described_class::ALLOCATION_SETTING)
       expect(@cluster.event_reasons.last).to eq "ReplicaAllocationReenabled"
       expect(deleted_pods).to eq ["opensearch-demo-2"]
+
+      # Not read again while the node stays away
+      expect { run_ticks(@rolling_restart, 3) }.not_to(change { @environment.calls.count("GET _cluster/settings") })
+    end
+
+    it "leaves replica allocation which was re-enabled in the meantime alone" do
+      @environment.new_pods_pending = true
+      run_ticks(@rolling_restart, 2)
+      @environment.persistent.delete(described_class::ALLOCATION_SETTING) # eg. by hand
+
+      travel described_class::REPLICA_ALLOCATION_TIMEOUT + 1.second
+      expect { run_ticks(@rolling_restart, 1) }.not_to(change { @environment.calls.grep(/allocation\.enable/).size })
+      expect(@cluster.event_reasons).not_to include("ReplicaAllocationReenabled")
+      expect { run_ticks(@rolling_restart, 3) }.not_to(change { @environment.calls.count("GET _cluster/settings") })
+    end
+
+    it "leaves replica allocation disabled outside of rollouts alone, eg. for maintenance of a node" do
+      environment = SimulatedEnvironment.new(replicas: 3)
+      rolling_restart = described_class.new(SimulatedCluster.new(3), environment.client)
+      allow(Kubernetes).to receive_messages(statefulsets: environment.statefulsets, pods: environment.pods_resource)
+      environment.persistent[described_class::ALLOCATION_SETTING] = "primaries"
+      environment.kill(2)
+
+      rolling_restart.tick(environment.health, environment.nodes)
+      travel described_class::REPLICA_ALLOCATION_TIMEOUT + 1.second
+      rolling_restart.tick(environment.health, environment.nodes)
+
+      expect(environment.persistent[described_class::ALLOCATION_SETTING]).to eq "primaries"
     end
 
     it "re-enables replica allocation which an earlier operator run left disabled for a missing node" do
@@ -280,7 +308,10 @@ RSpec.describe OpensearchOperator::RollingRestart do
 
       restarted = described_class.new(@cluster, @environment.client)
       run_ticks(restarted, 1)
-      travel described_class::REPLICA_ALLOCATION_TIMEOUT + 1.second
+      travel described_class::REPLICA_ALLOCATION_TIMEOUT - 1.minute
+      run_ticks(restarted, 1)
+      expect(@environment.persistent[described_class::ALLOCATION_SETTING]).to eq "primaries"
+      travel 1.minute + 1.second
       run_ticks(restarted, 1)
 
       expect(@environment.persistent).not_to have_key(described_class::ALLOCATION_SETTING)

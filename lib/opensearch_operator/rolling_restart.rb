@@ -218,24 +218,26 @@ class OpensearchOperator
 
       all_nodes_present = unavailable_pod_names.empty? && health.fetch("number_of_nodes") == replicas
 
-      # Counts from when the rolling restart disabled replica allocation, or from noticing a missing node while an earlier
-      # operator run left it disabled
-      timed_out = @replica_allocation_disabled_since && @replica_allocation_disabled_since <= REPLICA_ALLOCATION_TIMEOUT.ago
-      if !all_nodes_present && (@replica_allocation_disabled_since.nil? || timed_out)
+      # Counts from when the rolling restart disabled replica allocation, or from noticing a missing node during a rollout
+      # which an earlier operator run left with replica allocation disabled. Allocation disabled outside of rollouts is left
+      # alone, eg. when someone disabled it by hand to take a node down for maintenance. False once checked during the
+      # current absence of a node and found enabled, so it isn't read again on every tick.
+      disabled_since = @replica_allocation_disabled_since
+      timed_out = disabled_since.is_a?(Time) && disabled_since <= REPLICA_ALLOCATION_TIMEOUT.ago
+      if !all_nodes_present && @in_progress && (disabled_since.nil? || timed_out)
         settings = @client.cluster.get_settings(flat_settings: true)
         replica_allocation_disabled = settings.dig("persistent", ALLOCATION_SETTING) == "primaries"
         if replica_allocation_disabled && timed_out
           @client.cluster.put_settings(body: { persistent: { ALLOCATION_SETTING => nil } })
-          missing = unavailable_pod_names.any? ? unavailable_pod_names.sort.join(", ") : "a node"
           @cluster.emit_event(
             "ReplicaAllocationReenabled",
-            "Re-enabled replica shard allocation after #{missing} stayed out of the cluster for " \
-            "#{REPLICA_ALLOCATION_TIMEOUT.inspect}, its replicas get rebuilt on the other nodes",
+            "Re-enabled replica shard allocation since #{unavailable_pod_names.sort.join(', ')} has been unavailable for at " \
+            "least #{REPLICA_ALLOCATION_TIMEOUT.inspect}, replicas missing from the cluster get rebuilt on the other nodes",
             type: "Warning",
           )
-          @replica_allocation_disabled_since = nil
+          @replica_allocation_disabled_since = false
         else
-          @replica_allocation_disabled_since = replica_allocation_disabled ? Time.now : nil
+          @replica_allocation_disabled_since = replica_allocation_disabled ? Time.now : false
         end
       end
 
