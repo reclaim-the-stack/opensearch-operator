@@ -44,6 +44,10 @@ class OpensearchOperator
     MAX_VOTING_CONFIG_EXCLUSIONS = 10
 
     ALLOCATION_SETTING = "cluster.routing.allocation.enable"
+    # How long replica allocation stays disabled while a node is missing. A pod deleted by a rolling restart might never
+    # come back, eg. when its volume was on a Kubernetes node which is gone, and its replicas then have to be rebuilt on the
+    # other nodes. Elasticsearch's node shutdown API, which ECK uses, has the same safeguard (allocation_delay).
+    REPLICA_ALLOCATION_TIMEOUT = 10.minutes
     # NOTE: Managed by the scale down procedure, node names excluded by hand get cleared
     EXCLUDE_SETTING = "cluster.routing.allocation.exclude._name"
 
@@ -55,6 +59,7 @@ class OpensearchOperator
       @waiting_for_green_since = nil
       @blocked_by_red_reported = false
       @scale_down = nil # :started, then :removed_pods once the StatefulSet replicas have been lowered
+      @replica_allocation_disabled_since = nil
     end
 
     # Returns true when the cluster is settled, ie. no rollout or scaling is pending and health is green
@@ -213,6 +218,29 @@ class OpensearchOperator
 
       all_nodes_present = unavailable_pod_names.empty? && health.fetch("number_of_nodes") == replicas
 
+      # Counts from when the rolling restart disabled replica allocation, or from noticing a missing node during a rollout
+      # which an earlier operator run left with replica allocation disabled. Allocation disabled outside of rollouts is left
+      # alone, eg. when someone disabled it by hand to take a node down for maintenance. False once checked during the
+      # current absence of a node and found enabled, so it isn't read again on every tick.
+      disabled_since = @replica_allocation_disabled_since
+      timed_out = disabled_since.is_a?(Time) && disabled_since <= REPLICA_ALLOCATION_TIMEOUT.ago
+      if !all_nodes_present && @in_progress && (disabled_since.nil? || timed_out)
+        settings = @client.cluster.get_settings(flat_settings: true)
+        replica_allocation_disabled = settings.dig("persistent", ALLOCATION_SETTING) == "primaries"
+        if replica_allocation_disabled && timed_out
+          @client.cluster.put_settings(body: { persistent: { ALLOCATION_SETTING => nil } })
+          @cluster.emit_event(
+            "ReplicaAllocationReenabled",
+            "Re-enabled replica shard allocation since #{unavailable_pod_names.sort.join(', ')} has been unavailable for at " \
+            "least #{REPLICA_ALLOCATION_TIMEOUT.inspect}, replicas missing from the cluster get rebuilt on the other nodes",
+            type: "Warning",
+          )
+          @replica_allocation_disabled_since = false
+        else
+          @replica_allocation_disabled_since = replica_allocation_disabled ? Time.now : false
+        end
+      end
+
       unless all_nodes_present
         # A stale pod which is the only unavailable one and whose node has left the cluster (crashlooping, unschedulable,
         # on a dead node) can't be waited for, and a corrected spec can only take effect by recreating it.
@@ -240,6 +268,7 @@ class OpensearchOperator
         return false
       end
 
+      @replica_allocation_disabled_since = nil
       # All nodes are present so shard allocation must not remain disabled, regardless of how it got disabled
       # (eg. operator crash after deleting a pod). Outside of rollouts a single check after operator start suffices.
       if @in_progress || !@settings_verified
@@ -347,6 +376,7 @@ class OpensearchOperator
       # Prevents the cluster from rebuilding replicas elsewhere while the node is down (default delay is 1 minute
       # and a pod restart takes longer than that). The returning node recovers its replicas from local disk instead.
       @client.cluster.put_settings(body: { persistent: { ALLOCATION_SETTING => "primaries" } })
+      @replica_allocation_disabled_since = Time.now
       # Not strictly required (OpenSearch flushes on graceful shutdown) but optimizes terminate -> recovery, same as ECK does
       @client.indices.flush
       remaining = stale_pods.size - 1
