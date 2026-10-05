@@ -17,6 +17,17 @@ class OpensearchOperator
     # reporting the failure, would otherwise retry it right away.
     RECONCILE_RETRY_INTERVAL = 1.minute
 
+    # Settings the startup script writes to opensearch.yml (see templates/_startup_script.sh.mustache), on top of the
+    # s3.client.<repository>.* settings of each snapshot repository. Setting them in spec.config too either stops OpenSearch
+    # from starting (a duplicate key) or silently overrides the operator's value (the nested YAML form).
+    MANAGED_CONFIG_SETTINGS = %w[
+      network.host cluster.name node.name discovery.seed_hosts cluster.initial_cluster_manager_nodes
+      plugins.security.ssl.transport.pemcert_filepath plugins.security.ssl.transport.pemkey_filepath
+      plugins.security.ssl.transport.pemtrustedcas_filepath plugins.security.ssl.transport.enforce_hostname_verification
+      plugins.security.ssl.transport.resolve_hostname plugins.security.ssl.http.enabled plugins.security.authcz.admin_dn
+      plugins.security.nodes_dn plugins.security.allow_default_init_securityindex prometheus.indices
+    ].freeze
+
     # Failed snapshot repository upserts are retried with a backoff rather than on every poll since their causes, eg. an
     # unreachable S3 endpoint or a bucket which doesn't exist, tend to last a while
     SNAPSHOT_REPOSITORIES_RETRY_INTERVAL = 5.minutes
@@ -451,6 +462,21 @@ class OpensearchOperator
 
         repository["access_key_secret"] = repository.fetch("accessKeyId")
         repository["secret_key_secret"] = repository.fetch("secretAccessKey")
+      end
+
+      # Raised before the StatefulSet is touched, so the pods keep running and the Reconciled condition shows why
+      flatten = lambda do |settings, prefix|
+        settings.flat_map do |key, value|
+          setting = [prefix, key].compact.join(".")
+          value.is_a?(Hash) ? flatten.call(value, setting) : [setting]
+        end
+      end
+      repository_settings = repositories.flat_map do |repository|
+        %w[endpoint region protocol].map { |setting| "s3.client.#{repository.fetch('name')}.#{setting}" }
+      end
+      managed_settings = flatten.call(spec["config"] || {}, nil) & (MANAGED_CONFIG_SETTINGS + repository_settings)
+      if managed_settings.any?
+        raise ArgumentError, "spec.config sets settings which the operator manages: #{managed_settings.join(', ')}"
       end
 
       config_yaml_string = spec["config"].present? ? YAML.dump(spec["config"]).delete_prefix("---\n") : nil

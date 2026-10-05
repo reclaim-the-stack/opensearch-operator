@@ -61,6 +61,10 @@ TODO: add comprehensive documentation.
 
 `ghcr.io/reclaim-the-stack/opensearch:<version>` comes with those plugins installed, so its pods start without downloading anything. `ghcr.io/reclaim-the-stack/opensearch:3.8.0` is the default: a cluster without `spec.image` gets the default of the installed CRD, so upgrading the operator can upgrade OpenSearch too. Set `spec.image` to decide when to upgrade instead. CI builds it for the versions listed in `.github/workflows/opensearch-images.yml`, currently 3.8.0, and a version can only be built once its exporter is released. Upgrade the operator to 0.15.0 or later before switching to it, earlier versions fail to install the plugins a second time.
 
+## Configuration
+
+`spec.config` is added to `opensearch.yml`, in flat (`indices.query.bool.max_clause_count: 4096`) or nested YAML form. The settings the operator writes itself (eg. `cluster.name`, `network.host`, `node.name`, `discovery.seed_hosts`, the transport TLS settings and the `s3.client.<repository>.*` settings of snapshot repositories) can't be set there: the reconciliation fails, without touching the pods, and the Reconciled condition names them.
+
 ## Bootstrapping
 
 A new cluster bootstraps, ie. elects its first cluster manager, on its first start, however long its pods take to start (eg. while nodes are added or images pulled). Once it has formed, the operator records its UUID in the ConfigMap `opensearch-<name>-bootstrap`, and nodes started from then on don't bootstrap any more. A node without data which started while no cluster manager was reachable would otherwise form a second, empty cluster.

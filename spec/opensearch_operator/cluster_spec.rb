@@ -140,6 +140,28 @@ RSpec.describe OpensearchOperator::Cluster do
       expect(applied_statefulset.dig("spec", "updateStrategy")).to eq("type" => "OnDelete")
     end
 
+    it "applies nothing when spec.config sets settings the operator manages, in either YAML form" do
+      manifest["spec"]["config"] = {
+        "cluster" => { "name" => "renamed", "routing.allocation.awareness.attributes" => "zone" },
+        "network.host" => "127.0.0.1",
+        "s3.client.backups.endpoint" => "example.com",
+        "indices.query.bool.max_clause_count" => 4096,
+      }
+      manifest["spec"]["snapshotRepositories"] = [
+        {
+          "name" => "backups", "type" => "s3", "bucket" => "bucket", "base_path" => "example", "policies" => [],
+          "accessKeyId" => { "name" => "credentials", "key" => "access_key" },
+          "secretAccessKey" => { "name" => "credentials", "key" => "secret_key" }
+        },
+      ]
+
+      expect { cluster.reconsile }.to raise_error(
+        ArgumentError,
+        "spec.config sets settings which the operator manages: cluster.name, network.host, s3.client.backups.endpoint",
+      )
+      expect(fake_kubernetes.applied[:statefulsets]).to be_empty
+    end
+
     it "applies nothing when the existing StatefulSet can't be read" do
       allow(fake_kubernetes.statefulsets).to receive(:get).and_raise(Kubernetes::Error, "Get opensearch-example failed: 503")
 

@@ -32,7 +32,6 @@ explore.enabled: true
 - Snapshot management: removing a repository leaves its policies behind, and changed S3 credentials in the referenced Secrets only reach the keystore once the pods restart, which nothing triggers.
 - Dashboards is upgraded right away while OpenSearch restarts one pod at a time, so it's unavailable during minor version upgrades.
 - No leader election: the Recreate strategy doesn't prevent two operator instances when a node's kubelet hangs.
-- spec.config keys which the operator sets itself (network.host, cluster.name, plugins.security.* etc) produce duplicate keys which stop OpenSearch from starting.
 - No pod securityContext.fsGroup, fine with hostpath volumes but likely to fail with block storage CSI drivers.
 - The operator Deployment has no probes.
 
