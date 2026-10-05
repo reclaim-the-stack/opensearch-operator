@@ -639,6 +639,8 @@ class OpensearchOperator
           nil
         elsif health == "unreachable"
           ["False", "Unreachable", "The OpenSearch REST API isn't reachable"]
+        elsif health == "unauthorized"
+          ["False", "Unauthorized", "OpenSearch rejects the operator's admin credentials"]
         elsif health == "red"
           ["False", "HealthRed", "Cluster health is red"]
         elsif @evaluated_statefulset_generation.to_i < @applied_statefulset_generation.to_i

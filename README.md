@@ -49,7 +49,7 @@ The operator targets Kubernetes 1.36 or later.
 
 - Deploy the operator: `kubectl apply -k deploy/`
 - Create sample cluster: `kubectl apply -f examples/simple.yaml`
-- Inspect: `kubectl get opensearch` (the `Health` column shows `Unreachable` when the operator can't reach the cluster)
+- Inspect: `kubectl get opensearch` (the `Health` column shows `Unreachable` when the operator can't reach the cluster, and `Unauthorized` when OpenSearch rejects its admin credentials)
 
 Look at the example files to understand the CRD structure.
 
@@ -108,7 +108,7 @@ A cluster which stays yellow, eg. because an index has more replicas than the no
 `kubectl get opensearch` shows the version, health and number of nodes of each cluster, whether it's ready, and its phase, eg. the progress of a rolling restart. `kubectl describe opensearch <name>` also shows two conditions with their messages:
 
 - `Reconciled` tells whether the latest generation of the spec was applied, with the error if it wasn't. Failed reconciliations are retried on the next change of the spec and every 10 minutes.
-- `Ready` is `True` once the latest generation was applied, the cluster is reachable, its health isn't red and no rolling restart or scaling is in progress. Otherwise its reason is `ReconcileFailed`, `Unreachable`, `HealthRed`, `Progressing` or `Deleting`.
+- `Ready` is `True` once the latest generation was applied, the cluster is reachable, its health isn't red and no rolling restart or scaling is in progress. Otherwise its reason is `ReconcileFailed`, `Unreachable`, `Unauthorized`, `HealthRed`, `Progressing` or `Deleting`.
 
 `kubectl wait --for=condition=Ready opensearch/<name> --timeout=15m` waits for a cluster to be ready, eg. after creating it.
 

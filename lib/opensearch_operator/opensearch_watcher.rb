@@ -10,7 +10,7 @@ require "opensearch-ruby"
 #   # - :number_of_nodes (Integer)
 #   # - :master (String, node name)
 #   # - :cluster_manager (String, node name)
-#   # - :status (String, "green", "yellow", "red" or "unreachable")
+#   # - :status (String, "green", "yellow", "red", "unauthorized" or "unreachable")
 #   # - :version (String, OpenSearch version)
 #   puts "State changed: #{changed_keys.join(", ")}"
 #   puts new_state.inspect
@@ -107,11 +107,15 @@ class OpensearchOperator
         skip_sleep = wait_for_green
       rescue OpenSearch::Transport::Transport::Error, Faraday::Error => e
         # An unreachable cluster is expected at times, eg. while it bootstraps, and isn't a bug of the operator. It's logged and
-        # shows in the status (the Unreachable reason of the Ready condition) rather than being reported to Sentry.
+        # shows in the status (the Unreachable reason of the Ready condition) rather than being reported to Sentry. Rejected
+        # credentials, eg. an admin password changed outside the operator, show as unauthorized instead.
         LOGGER.warn "class=OpensearchWatcher error=#{e.class} url=#{@url_without_basicauth} message=#{e.message}"
 
-        unless @state[:status] == "unreachable"
-          @state = @state.merge(status: "unreachable")
+        errors = OpenSearch::Transport::Transport::Errors
+        rejected = e.is_a?(errors::Unauthorized) || e.is_a?(errors::Forbidden)
+        status = rejected ? "unauthorized" : "unreachable"
+        unless @state[:status] == status
+          @state = @state.merge(status:)
           yield(@state, [:status])
         end
       rescue StandardError => e
