@@ -257,6 +257,36 @@ RSpec.describe OpensearchOperator::RollingRestart do
       expect(@cluster.event_reasons).to include("RollingRestartProceedingOnYellow")
     end
 
+    it "re-enables replica allocation when a restarted pod doesn't rejoin within REPLICA_ALLOCATION_TIMEOUT" do
+      @environment.new_pods_pending = true # the deleted pod comes back, but never joins
+      run_ticks(@rolling_restart, 1)
+      expect(@environment.persistent[described_class::ALLOCATION_SETTING]).to eq "primaries"
+
+      run_ticks(@rolling_restart, 3)
+      travel described_class::REPLICA_ALLOCATION_TIMEOUT - 1.minute
+      run_ticks(@rolling_restart, 1)
+      expect(@environment.persistent[described_class::ALLOCATION_SETTING]).to eq "primaries"
+
+      travel 2.minutes
+      run_ticks(@rolling_restart, 1)
+      expect(@environment.persistent).not_to have_key(described_class::ALLOCATION_SETTING)
+      expect(@cluster.event_reasons.last).to eq "ReplicaAllocationReenabled"
+      expect(deleted_pods).to eq ["opensearch-demo-2"]
+    end
+
+    it "re-enables replica allocation which an earlier operator run left disabled for a missing node" do
+      @environment.new_pods_pending = true
+      run_ticks(@rolling_restart, 3)
+
+      restarted = described_class.new(@cluster, @environment.client)
+      run_ticks(restarted, 1)
+      travel described_class::REPLICA_ALLOCATION_TIMEOUT + 1.second
+      run_ticks(restarted, 1)
+
+      expect(@environment.persistent).not_to have_key(described_class::ALLOCATION_SETTING)
+      expect(@cluster.event_reasons.last).to eq "ReplicaAllocationReenabled"
+    end
+
     it "waits for green afresh after a scale down interrupted it" do
       @environment.status = "yellow"
       run_ticks(@rolling_restart, 2)
