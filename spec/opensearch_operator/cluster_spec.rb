@@ -140,6 +140,50 @@ RSpec.describe OpensearchOperator::Cluster do
       expect(applied_statefulset.dig("spec", "updateStrategy")).to eq("type" => "OnDelete")
     end
 
+    it "applies nothing when spec.config sets settings the operator manages, in either YAML form" do
+      manifest["spec"]["config"] = {
+        "cluster" => { "name" => "renamed", "routing.allocation.awareness.attributes" => "zone" },
+        "network.host" => "127.0.0.1",
+        "s3.client.backups.endpoint" => "example.com",
+        "indices.query.bool.max_clause_count" => 4096,
+      }
+      manifest["spec"]["snapshotRepositories"] = [
+        {
+          "name" => "backups", "type" => "s3", "bucket" => "bucket", "base_path" => "example", "policies" => [],
+          "accessKeyId" => { "name" => "credentials", "key" => "access_key" },
+          "secretAccessKey" => { "name" => "credentials", "key" => "secret_key" }
+        },
+      ]
+
+      expect { cluster.reconsile }.to raise_error(
+        described_class::InvalidSpec,
+        "spec.config sets settings which the operator manages: cluster.name, network.host, s3.client.backups.endpoint",
+      )
+      expect(fake_kubernetes.applied.values.flatten).to be_empty
+      expect(fake_kubernetes.condition("Reconciled")["message"])
+        .to eq "spec.config sets settings which the operator manages: cluster.name, network.host, s3.client.backups.endpoint"
+    end
+
+    it "lets spec.config override the operator's defaults" do
+      manifest["spec"]["config"] = { "prometheus" => { "indices" => true } }
+
+      cluster.reconsile
+
+      startup_script = applied_statefulset.dig("spec", "template", "spec", "containers", 0, "command", 3)
+      expect(startup_script).not_to include "prometheus.indices: false"
+      expect(startup_script).to include "plugins.security.ssl.transport.resolve_hostname: false"
+      expect(startup_script).to include "prometheus:\n  indices: true"
+    end
+
+    it "covers every setting the startup script writes, so spec.config can't collide with one" do
+      cluster.reconsile
+
+      startup_script = applied_statefulset.dig("spec", "template", "spec", "containers", 0, "command", 3)
+      written = startup_script.scan(/^\s*(?:echo ")?([a-z][\w.]+):/).flatten.uniq
+      expect(written - described_class::MANAGED_CONFIG_SETTINGS - described_class::DEFAULT_CONFIG_SETTINGS).to be_empty
+      expect(written).to include("cluster.name", "prometheus.indices")
+    end
+
     it "applies nothing when the existing StatefulSet can't be read" do
       allow(fake_kubernetes.statefulsets).to receive(:get).and_raise(Kubernetes::Error, "Get opensearch-example failed: 503")
 
@@ -573,6 +617,8 @@ RSpec.describe OpensearchOperator::Cluster do
         expect { restarted.reconsile }.to raise_error(Kubernetes::Error)
         expect(fake_kubernetes.events).to be_empty
         expect(fake_kubernetes.status_patches).to be_empty
+        # The running cluster keeps being watched while the new generation fails
+        expect(OpensearchOperator::OpensearchWatcher).to have_received(:new)
       end
     end
   end

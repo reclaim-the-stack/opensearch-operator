@@ -17,6 +17,26 @@ class OpensearchOperator
     # reporting the failure, would otherwise retry it right away.
     RECONCILE_RETRY_INTERVAL = 1.minute
 
+    # Settings the operator depends on, which spec.config can't set: those the startup script writes to opensearch.yml (see
+    # templates/_startup_script.sh.mustache), their legacy aliases and discovery.type, on top of the s3.client.<repository>.*
+    # settings of each snapshot repository. Setting them in spec.config too either stops OpenSearch from starting (a
+    # duplicate key or a conflicting alias) or silently overrides the operator's value (the nested YAML form).
+    MANAGED_CONFIG_SETTINGS = %w[
+      network.host cluster.name node.name discovery.seed_hosts discovery.zen.ping.unicast.hosts discovery.type
+      cluster.initial_cluster_manager_nodes cluster.initial_master_nodes plugins.security.ssl.transport.pemcert_filepath
+      plugins.security.ssl.transport.pemkey_filepath plugins.security.ssl.transport.pemtrustedcas_filepath
+      plugins.security.ssl.http.enabled plugins.security.authcz.admin_dn plugins.security.nodes_dn
+      plugins.security.allow_default_init_securityindex
+    ].freeze
+    # Defaults the startup script writes unless spec.config sets them
+    DEFAULT_CONFIG_SETTINGS = %w[
+      plugins.security.ssl.transport.enforce_hostname_verification plugins.security.ssl.transport.resolve_hostname
+      prometheus.indices
+    ].freeze
+
+    # A spec which the reconciliation rejects, reported in the status rather than to Sentry
+    InvalidSpec = Class.new(StandardError)
+
     # Failed snapshot repository upserts are retried with a backoff rather than on every poll since their causes, eg. an
     # unreachable S3 endpoint or a bucket which doesn't exist, tend to last a while
     SNAPSHOT_REPOSITORIES_RETRY_INTERVAL = 5.minutes
@@ -72,6 +92,15 @@ class OpensearchOperator
         return
       end
 
+      # Checked before anything is applied, so the pods keep running with the previous generation
+      repository_settings = spec.fetch("snapshotRepositories").flat_map do |repository|
+        %w[endpoint region protocol].map { |setting| "s3.client.#{repository.fetch('name')}.#{setting}" }
+      end
+      managed_settings = config_settings & (MANAGED_CONFIG_SETTINGS + repository_settings)
+      if managed_settings.any?
+        raise InvalidSpec, "spec.config sets settings which the operator manages: #{managed_settings.join(', ')}"
+      end
+
       ensure_credentials_secret
       ensure_certificates_secret
       ensure_security_config
@@ -86,7 +115,7 @@ class OpensearchOperator
       @reconcile_failure = nil
       patch_status(observedGeneration: generation, operatorManifestVersion: MANIFEST_VERSION)
     rescue StandardError => e
-      message = "#{e.class}: #{e.message}".truncate(1000)
+      message = (e.is_a?(InvalidSpec) ? e.message : "#{e.class}: #{e.message}").truncate(1000)
       # Retries of the generation fail the same way, one event per distinct failure keeps them from flooding the events.
       # Compared to the published condition, which also holds across operator restarts.
       published = published_conditions.find { |condition| condition["type"] == "Reconciled" }
@@ -95,6 +124,9 @@ class OpensearchOperator
       end
       @reconcile_failure = { generation:, message:, failed_at: Time.now }
       patch_status
+      # A cluster which was reconciled before keeps being watched (health, rolling restarts, PodDisruptionBudget), eg. when
+      # the operator restarted while a new generation fails
+      initialize_or_trigger_watcher if @watcher.nil? && @manifest.dig("status", "observedGeneration")
       raise
     end
 
@@ -456,9 +488,13 @@ class OpensearchOperator
       config_yaml_string = spec["config"].present? ? YAML.dump(spec["config"]).delete_prefix("---\n") : nil
 
       bootstrap_path = "/tmp/bootstrap"
+      settings = config_settings
       startup_script = Template["_startup_script"].render(
         bootstrap_path:,
         config_yaml_string:,
+        configured_hostname_verification: settings.include?("plugins.security.ssl.transport.enforce_hostname_verification"),
+        configured_prometheus_indices: settings.include?("prometheus.indices"),
+        configured_resolve_hostname: settings.include?("plugins.security.ssl.transport.resolve_hostname"),
         has_repositories: repositories.any?,
         name:,
         namespace:,
@@ -539,6 +575,17 @@ class OpensearchOperator
         owner_references:,
       )
       Kubernetes.services.apply(dashboards_service)
+    end
+
+    # The settings spec.config sets, in flat form whether they're nested or not
+    def config_settings
+      flatten = lambda do |settings, prefix|
+        settings.flat_map do |key, value|
+          setting = [prefix, key].compact.join(".")
+          value.is_a?(Hash) ? flatten.call(value, setting) : [setting]
+        end
+      end
+      flatten.call(spec["config"] || {}, nil)
     end
 
     def owner_references
