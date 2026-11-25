@@ -46,7 +46,7 @@ class OpensearchOperator
     rescue Psych::SyntaxError
       if respond_to?(:debugger)
         puts "Template rendered invalid YAML, entering debugger..."
-        debugger
+        debugger # rubocop:disable Lint/Debugger
       end
       raise
     end
