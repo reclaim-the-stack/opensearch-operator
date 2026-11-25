@@ -61,6 +61,8 @@ TODO: add comprehensive documentation.
 
 `ghcr.io/reclaim-the-stack/opensearch:<version>` comes with those plugins installed, so its pods start without downloading anything. `ghcr.io/reclaim-the-stack/opensearch:3.8.0` is the default: a cluster without `spec.image` gets the default of the installed CRD, so upgrading the operator can upgrade OpenSearch too. Set `spec.image` to decide when to upgrade instead. CI builds it for the versions listed in `.github/workflows/opensearch-images.yml`, currently 3.8.0, and a version can only be built once its exporter is released. Upgrade the operator to 0.15.0 or later before switching to it, earlier versions fail to install the plugins a second time.
 
+Dashboards runs `opensearchproject/opensearch-dashboards` with the tag of `spec.image`. Not every OpenSearch patch release comes with a Dashboards release (3.10.1 doesn't), and the Dashboards pod of such a version can't pull its image. Set `spec.dashboardsImage` to the latest Dashboards release of the same minor version then, eg. `opensearchproject/opensearch-dashboards:3.10.0`.
+
 ## Configuration
 
 `spec.config` is added to `opensearch.yml`, in flat (`indices.query.bool.max_clause_count: 4096`) or nested YAML form. The settings the operator depends on (eg. `cluster.name`, `network.host`, `node.name`, `discovery.seed_hosts`, the transport TLS certificates and the `s3.client.<repository>.*` settings of snapshot repositories) can't be set there: the reconciliation fails before applying anything, and the Reconciled condition names them. The operator's defaults for `prometheus.indices` and the transport `enforce_hostname_verification` and `resolve_hostname` settings can be overridden.

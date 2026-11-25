@@ -95,6 +95,34 @@ RSpec.describe OpensearchOperator::Cluster do
     end
   end
 
+  describe "the applied Dashboards Deployment" do
+    before do
+      fake_kubernetes
+      fake_watcher
+    end
+
+    def dashboards_image
+      fake_kubernetes.applied[:deployments].last.dig("spec", "template", "spec", "containers", 0, "image")
+    end
+
+    it "uses the Dashboards release of the OpenSearch version" do
+      cluster.reconsile
+
+      expect(dashboards_image).to eq "opensearchproject/opensearch-dashboards:3.1.0"
+    end
+
+    it "uses spec.dashboardsImage when set, for OpenSearch versions without a Dashboards release" do
+      OpensearchOperator::Cluster.new(
+        cluster_manifest(
+          image: "opensearchproject/opensearch:3.10.1",
+          dashboardsImage: "opensearchproject/opensearch-dashboards:3.10.0",
+        ),
+      ).reconsile
+
+      expect(dashboards_image).to eq "opensearchproject/opensearch-dashboards:3.10.0"
+    end
+  end
+
   describe "the applied StatefulSet" do
     before do
       fake_kubernetes
