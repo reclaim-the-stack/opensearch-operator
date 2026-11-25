@@ -27,7 +27,7 @@ jobs:
     strategy:
       matrix:
         # Each version needs a release of the Prometheus exporter for it
-        opensearch_version: ["3.8.0"]
+        opensearch_version: ["3.8.0", "3.9.0", "3.10.0"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
