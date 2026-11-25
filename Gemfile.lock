@@ -64,7 +64,9 @@ GEM
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
     logger (1.7.0)
-    minitest (5.25.5)
+    minitest (6.1.0)
+      drb (~> 2.0)
+      prism (>= 1.5, < 3)
     multi_json (1.17.0)
     mustache (1.1.1)
     net-http (0.6.0)
@@ -72,7 +74,6 @@ GEM
     opensearch-ruby (3.4.0)
       faraday (>= 1.0, < 3)
       multi_json (>= 1.0)
-    openssl (3.3.2)
     parallel (1.27.0)
     parser (3.3.9.0)
       ast (~> 2.4.1)
@@ -145,7 +146,7 @@ GEM
       concurrent-ruby (~> 1.0)
     unicode-display_width (3.2.0)
       unicode-emoji (~> 4.1)
-    unicode-emoji (4.1.0)
+    unicode-emoji (4.3.0)
     uri (1.0.3)
     webmock (3.25.1)
       addressable (>= 2.8.0)
@@ -163,7 +164,6 @@ DEPENDENCIES
   dotenv
   mustache
   opensearch-ruby
-  openssl (~> 3.3)
   rspec
   rubocop-mynewsdesk!
   sentry-ruby

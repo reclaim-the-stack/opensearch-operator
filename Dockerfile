@@ -1,7 +1,7 @@
-FROM ruby:3.4.5-slim
+FROM ruby:4.0.10-slim
 
-# libssl-dev for openssl gem
-RUN apt-get update && apt-get install -y build-essential libssl-dev
+# build-essential for the native extensions of bcrypt and concurrent-ruby-ext
+RUN apt-get update && apt-get install -y build-essential
 
 WORKDIR /app
 
