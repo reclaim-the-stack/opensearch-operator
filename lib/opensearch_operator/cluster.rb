@@ -84,8 +84,7 @@ class OpensearchOperator
       observed_manifest_version = @manifest.dig("status", "operatorManifestVersion")
 
       if observed_generation && observed_generation >= generation && observed_manifest_version == MANIFEST_VERSION
-        LOGGER.info "Generation #{generation} and manifest version #{MANIFEST_VERSION} already observed for " \
-                    "#{namespace}/#{name}, skipping reconciliation steps"
+        LOGGER.info "Generation #{generation} and manifest version #{MANIFEST_VERSION} already observed for #{namespace}/#{name}, skipping reconciliation steps" # rubocop:disable Layout/LineLength
         initialize_or_trigger_watcher
         @reconciled_generation = generation
         @reconcile_failure = nil
@@ -226,8 +225,7 @@ class OpensearchOperator
         nil
       rescue StandardError => e
         Sentry.capture_exception(e)
-        LOGGER.error "Failed to upsert snapshot repository #{repository_name} or its policies in cluster " \
-                     "#{namespace}/#{name}: #{e.class}: #{e.message}"
+        LOGGER.error "Failed to upsert snapshot repository #{repository_name} or its policies in cluster #{namespace}/#{name}: #{e.class}: #{e.message}" # rubocop:disable Layout/LineLength
         repository_name
       end
     end
@@ -295,8 +293,7 @@ class OpensearchOperator
 
     def reconcile_snapshot_policies(repository_name, policies, existing_policies)
       policies.each do |policy|
-        LOGGER.debug "Reconciling snapshot policy #{policy.fetch('name')} for repository #{repository_name} in cluster " \
-                     "#{namespace}/#{name}"
+        LOGGER.debug "Reconciling snapshot policy #{policy.fetch('name')} for repository #{repository_name} in cluster #{namespace}/#{name}" # rubocop:disable Layout/LineLength
         LOGGER.debug "Policy details: #{policy}"
         policy_name = "#{repository_name}-#{policy.fetch('name')}"
         payload = {
