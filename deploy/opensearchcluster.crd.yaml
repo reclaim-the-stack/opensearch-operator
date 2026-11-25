@@ -46,6 +46,9 @@ spec:
                   description: OpenSearch image, whose tag is the OpenSearch version (e.g., ghcr.io/reclaim-the-stack/opensearch:<major>.<minor>.<patch>, with the plugins the operator uses pre-installed, or opensearchproject/opensearch:<major>.<minor>.<patch>)
                   default: ghcr.io/reclaim-the-stack/opensearch:3.8.0
                   pattern: :[0-9]+\.[0-9]+\.[0-9]+$ # validate that the tag is in semver format
+                dashboardsImage:
+                  type: string
+                  description: OpenSearch Dashboards image. Defaults to opensearchproject/opensearch-dashboards with the tag of spec.image. Set it when there's no Dashboards release for the OpenSearch version, eg. opensearchproject/opensearch-dashboards:3.10.0 with OpenSearch 3.10.1.
                 replicas:
                   type: integer
                   description: Number of OpenSearch nodes. Lowering it migrates shards off the highest ordinal nodes before removing them.

@@ -554,7 +554,8 @@ class OpensearchOperator
     end
 
     def ensure_dashboards_deployment
-      dashboards_image = "opensearchproject/opensearch-dashboards:#{version}"
+      # OpenSearch patch releases don't always come with a Dashboards release, eg. 3.10.1
+      dashboards_image = spec["dashboardsImage"] || "opensearchproject/opensearch-dashboards:#{version}"
       opensearch_hosts = "http://opensearch-#{name}-client.#{namespace}.svc.cluster.local:9200"
 
       dashboards_deployment = Template["dashboards_deployment"].render(
