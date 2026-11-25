@@ -117,7 +117,9 @@ module Kubernetes
 
     def get!(name, namespace:)
       response = get(name, namespace:)
-      raise Error, "Get #{@plural}/#{name} in namespace #{namespace} failed: #{response['code']} #{response['message']}" if response["kind"] == "Status"
+      if response["kind"] == "Status"
+        raise Error, "Get #{@plural}/#{name} in namespace #{namespace} failed: #{response['code']} #{response['message']}"
+      end
 
       response
     end

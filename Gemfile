@@ -7,7 +7,6 @@ gem "bcrypt"
 gem "concurrent-ruby-ext"
 gem "mustache"
 gem "opensearch-ruby"
-gem "openssl", "~> 3.3" # locked due to: https://github.com/ruby/openssl/issues/949
 gem "sentry-ruby"
 
 group :development, :test do

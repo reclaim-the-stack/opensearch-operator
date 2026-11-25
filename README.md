@@ -182,7 +182,7 @@ The selector only matches the headless service of each cluster, which includes p
 
 ## Development
 
-Prerequisites: Ruby 3.4.5
+Prerequisites: Ruby 4.0.10
 
 Install dependencies: `bundle install`
 Run tests: `bundle exec rspec` (after changing a template, regenerate the rendered manifests in `spec/fixtures/manifests/` with `UPDATE_MANIFEST_SNAPSHOTS=1 bundle exec rspec`)

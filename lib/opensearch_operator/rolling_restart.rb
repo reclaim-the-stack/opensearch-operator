@@ -63,7 +63,7 @@ class OpensearchOperator
     end
 
     # Returns true when the cluster is settled, ie. no rollout or scaling is pending and health is green
-    def tick(health, nodes)
+    def tick(health, nodes) # rubocop:disable Naming/PredicateMethod
       statefulset = Kubernetes.statefulsets.get!(@cluster.statefulset_name, namespace: @cluster.namespace)
 
       # The StatefulSet controller hasn't processed the latest spec yet, updateRevision could be stale
@@ -94,10 +94,11 @@ class OpensearchOperator
       leaving_pod_names = expected_pod_names.drop(desired_replicas)
 
       # NOTE: The cluster label alone also matches the dashboards pods, hence the additional name label
+      label_selector = "app.kubernetes.io/name=opensearch,opensearch.reclaim-the-stack.com/cluster=#{@cluster.name}"
       # Pods beyond the StatefulSet replicas are left over from a scale down step
       pods, removed_pods = Kubernetes.pods.list(
         namespace: @cluster.namespace,
-        params: { labelSelector: "app.kubernetes.io/name=opensearch,opensearch.reclaim-the-stack.com/cluster=#{@cluster.name}" },
+        params: { labelSelector: label_selector },
       ).fetch("items").partition { |pod| expected_pod_names.include?(pod.dig("metadata", "name")) }
       pod_names = pods.map { |pod| pod.dig("metadata", "name") }
       joined_node_names = nodes.map { |node| node.fetch("name") }
@@ -111,11 +112,14 @@ class OpensearchOperator
           pod.dig("metadata", "labels", "controller-revision-hash") != update_revision
       end
 
-      unavailable_pod_names = expected_pod_names - pod_names
-      unavailable_pod_names += pods.select do |pod|
-        ready = pod.dig("status", "conditions").to_a.any? { |condition| condition["type"] == "Ready" && condition["status"] == "True" }
+      unavailable_pods = pods.select do |pod|
+        ready = pod.dig("status", "conditions").to_a.any? do |condition|
+          condition["type"] == "Ready" && condition["status"] == "True"
+        end
         pod.dig("metadata", "deletionTimestamp") || !ready
-      end.map { |pod| pod.dig("metadata", "name") }
+      end
+      unavailable_pod_names = expected_pod_names - pod_names
+      unavailable_pod_names += unavailable_pods.map { |pod| pod.dig("metadata", "name") }
 
       if stale_pods.any? && !@in_progress
         @in_progress = true
@@ -252,17 +256,25 @@ class OpensearchOperator
 
         if stuck_pod
           stuck_pod_name = stuck_pod.dig("metadata", "name")
+          stuck_pod_revision = stuck_pod.dig("metadata", "labels", "controller-revision-hash")
           # Reported first, so the PodDisruptionBudget allows no evictions by the time the pod is gone
           @cluster.update_phase("Rolling restart: restarting #{stuck_pod_name} (#{stale_pods.size - 1} pods remaining)")
           Kubernetes.pods.delete(stuck_pod_name, namespace: @cluster.namespace)
           @cluster.emit_event(
             "PodRestarted",
-            "Deleted unavailable pod #{stuck_pod_name} (revision #{stuck_pod.dig('metadata', 'labels', 'controller-revision-hash')}) " \
+            "Deleted unavailable pod #{stuck_pod_name} (revision #{stuck_pod_revision}) " \
             "which is not part of the cluster, #{stale_pods.size - 1} pods remaining",
           )
         elsif @in_progress
-          waiting_for = unavailable_pod_names.any? ? unavailable_pod_names.sort.join(", ") : "#{health.fetch('number_of_nodes')}/#{replicas} nodes"
-          @cluster.update_phase("Rolling restart: waiting for #{waiting_for} to join the cluster (#{stale_pods.size} pods remaining)")
+          waiting_for =
+            if unavailable_pod_names.any?
+              unavailable_pod_names.sort.join(", ")
+            else
+              "#{health.fetch('number_of_nodes')}/#{replicas} nodes"
+            end
+          @cluster.update_phase(
+            "Rolling restart: waiting for #{waiting_for} to join the cluster (#{stale_pods.size} pods remaining)",
+          )
         end
 
         return false
@@ -318,7 +330,8 @@ class OpensearchOperator
           @blocked_by_red_reported = true
           @cluster.emit_event(
             "RollingRestartBlocked",
-            "Cluster health is red (#{health.fetch('unassigned_shards')} unassigned shards), not restarting any more pods until primaries are assigned",
+            "Cluster health is red (#{health.fetch('unassigned_shards')} unassigned shards), " \
+            "not restarting any more pods until primaries are assigned",
             type: "Warning",
           )
         end
@@ -328,7 +341,7 @@ class OpensearchOperator
       @blocked_by_red_reported = false
 
       if status == "yellow"
-        recovering = health.fetch("initializing_shards") + health.fetch("relocating_shards") + health.fetch("delayed_unassigned_shards")
+        recovering = health.fetch_values("initializing_shards", "relocating_shards", "delayed_unassigned_shards").sum
         # The tolerance only starts counting once recovery has stopped making progress
         @waiting_for_green_since = nil if recovering.positive?
         @waiting_for_green_since ||= Time.now
@@ -346,8 +359,8 @@ class OpensearchOperator
         if stale_pods.any?
           @cluster.emit_event(
             "RollingRestartProceedingOnYellow",
-            "Cluster health has been yellow for #{waited.round} seconds with #{health.fetch('unassigned_shards')} unassigned shards " \
-            "and no shard recovery in progress, proceeding with restart of the next pod anyway",
+            "Cluster health has been yellow for #{waited.round} seconds with #{health.fetch('unassigned_shards')} " \
+            "unassigned shards and no shard recovery in progress, proceeding with restart of the next pod anyway",
             type: "Warning",
           )
         end
@@ -384,10 +397,11 @@ class OpensearchOperator
       @cluster.update_phase("Rolling restart: restarting #{pod_name} (#{remaining} pods remaining)")
       Kubernetes.pods.delete(pod_name, namespace: @cluster.namespace)
 
+      cluster_manager_note = " (this was the cluster manager)" if pod_name == cluster_manager
       @cluster.emit_event(
         "PodRestarted",
         "Deleted pod #{pod_name} (revision #{pod_revision}) after disabling replica shard allocation and flushing, " \
-        "#{remaining} pods remaining#{pod_name == cluster_manager ? ' (this was the cluster manager)' : ''}",
+        "#{remaining} pods remaining#{cluster_manager_note}",
       )
       false
     end

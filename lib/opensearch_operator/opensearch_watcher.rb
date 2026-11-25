@@ -99,7 +99,7 @@ class OpensearchOperator
             @on_poll_callback.call(health, nodes)
           rescue StandardError => e
             Sentry.capture_exception(e)
-            LOGGER.error "class=OpensearchWatcher action=on-poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
+            LOGGER.error "class=OpensearchWatcher action=on-poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}" # rubocop:disable Layout/LineLength
           end
         end
 
@@ -121,7 +121,7 @@ class OpensearchOperator
       rescue StandardError => e
         # Anything else is a bug, but must not kill the watcher thread
         Sentry.capture_exception(e)
-        LOGGER.error "class=OpensearchWatcher action=poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}"
+        LOGGER.error "class=OpensearchWatcher action=poll-failed url=#{@url_without_basicauth} error=#{e.class} message=#{e.message}" # rubocop:disable Layout/LineLength
       ensure
         sleep CHECK_INTERVAL unless skip_sleep
       end
