@@ -6,7 +6,9 @@ RUN apt-get update && apt-get install -y build-essential
 WORKDIR /app
 
 COPY Gemfile Gemfile.lock* /app/
-RUN bundle install --without development test
+# Bundler 4 removed the --without flag. As an ENV it also applies to bundler/setup when the operator starts
+ENV BUNDLE_WITHOUT=development:test
+RUN bundle install
 
 COPY lib /app/lib
 COPY templates /app/templates
